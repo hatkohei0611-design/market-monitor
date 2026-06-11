@@ -41,10 +41,19 @@ THRESH = 1.0
 REQ_INTERVAL = 0.13  # 約7.7req/s (SEC上限10req/sに余裕)
 
 SEC_CONTACT = os.environ.get("SEC_CONTACT", "anonymous@example.com")
-# SEC推奨形式: 会社名/アプリ名 + 連絡先 (https://www.sec.gov/os/accessing-edgar-data)
+# SEC公式サンプルと同じ素朴な形式: "Sample Company Name AdminContact@example.com"
 SEC_HEADERS = {
-    "User-Agent": f"MarketMonitor/1.0 (personal research; {SEC_CONTACT})",
+    "User-Agent": f"market-monitor {SEC_CONTACT}",
     "Accept-Encoding": "gzip, deflate",
+    "Accept": "*/*",
+}
+# ブラウザ系サイト(FRED/Stooq/Yahoo)用
+BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "text/csv,application/json,text/html,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 SESSION = requests.Session()
 
@@ -72,6 +81,9 @@ def fetch(url, ok404=False, headers=None, tries=4):
             log(f"  HTTP {r.status_code} -> {4*(i+1)}秒待って再試行 ({url[-40:]})")
             time.sleep(4 * (i + 1))
             continue
+        if r.status_code >= 400:
+            body = r.text[:200].replace("\n", " ")
+            log(f"  [診断] HTTP {r.status_code} body先頭: {body}")
         r.raise_for_status()
         return r
     if last_err:
@@ -192,10 +204,22 @@ def update_insider():
 # ============================================================
 # 2. S&P 500 (Stooq)
 # ============================================================
+def _spx_from_yahoo():
+    """Yahoo Finance chart API (JSON)"""
+    r = fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
+              "?range=2y&interval=1d", headers=BROWSER_HEADERS)
+    j = r.json()["chart"]["result"][0]
+    ts = j["timestamp"]
+    cl = j["indicators"]["quote"][0]["close"]
+    df = pd.DataFrame({"date": pd.to_datetime(ts, unit="s").normalize(),
+                       "close": cl})
+    return df.dropna()
+
+
 def _spx_from_fred():
     """FRED公式CSV (キー不要、直近10年分)"""
     r = fetch("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500",
-              headers={"User-Agent": "Mozilla/5.0 market-monitor"})
+              headers=BROWSER_HEADERS)
     df = pd.read_csv(io.StringIO(r.text))
     df = df.iloc[:, :2]
     df.columns = ["date", "close"]  # 列名は DATE/observation_date 両対応
@@ -206,7 +230,7 @@ def _spx_from_fred():
 
 def _spx_from_stooq():
     r = fetch("https://stooq.com/q/d/l/?s=%5Espx&i=d",
-              headers={"User-Agent": "Mozilla/5.0 market-monitor"})
+              headers=BROWSER_HEADERS)
     df = pd.read_csv(io.StringIO(r.text))
     cols = {c.lower(): c for c in df.columns}
     if "date" not in cols or "close" not in cols:
@@ -218,7 +242,8 @@ def _spx_from_stooq():
 
 
 def update_spx():
-    for name, fn, min_len in [("FRED", _spx_from_fred, 500),
+    for name, fn, min_len in [("Yahoo", _spx_from_yahoo, 400),
+                              ("FRED", _spx_from_fred, 500),
                               ("Stooq", _spx_from_stooq, 1000)]:
         try:
             spx = fn()
