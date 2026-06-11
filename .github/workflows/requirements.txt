@@ -1,0 +1,4 @@
+requests
+pandas
+matplotlib
+japanize-matplotlib
