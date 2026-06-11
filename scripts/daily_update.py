@@ -41,7 +41,11 @@ THRESH = 1.0
 REQ_INTERVAL = 0.13  # 約7.7req/s (SEC上限10req/sに余裕)
 
 SEC_CONTACT = os.environ.get("SEC_CONTACT", "anonymous@example.com")
-UA = {"User-Agent": f"market-monitor research {SEC_CONTACT}"}
+# SEC推奨形式: 会社名/アプリ名 + 連絡先 (https://www.sec.gov/os/accessing-edgar-data)
+SEC_HEADERS = {
+    "User-Agent": f"MarketMonitor/1.0 (personal research; {SEC_CONTACT})",
+    "Accept-Encoding": "gzip, deflate",
+}
 SESSION = requests.Session()
 
 warnings = []  # ダッシュボードに表示する警告
@@ -51,13 +55,28 @@ def log(msg):
     print(f"[{dt.datetime.utcnow():%H:%M:%S}] {msg}", flush=True)
 
 
-def fetch(url, ok404=False):
-    r = SESSION.get(url, headers=UA, timeout=60)
-    time.sleep(REQ_INTERVAL)
-    if r.status_code == 404 and ok404:
-        return None
+def fetch(url, ok404=False, headers=None, tries=4):
+    """403/429/5xx は間隔を空けてリトライする"""
+    last_err = None
+    for i in range(tries):
+        try:
+            r = SESSION.get(url, headers=headers or SEC_HEADERS, timeout=60)
+        except requests.RequestException as e:
+            last_err = e
+            time.sleep(4 * (i + 1))
+            continue
+        time.sleep(REQ_INTERVAL)
+        if r.status_code == 404 and ok404:
+            return None
+        if r.status_code in (403, 429, 500, 502, 503) and i < tries - 1:
+            log(f"  HTTP {r.status_code} -> {4*(i+1)}秒待って再試行 ({url[-40:]})")
+            time.sleep(4 * (i + 1))
+            continue
+        r.raise_for_status()
+        return r
+    if last_err:
+        raise last_err
     r.raise_for_status()
-    return r
 
 
 # ============================================================
@@ -173,22 +192,48 @@ def update_insider():
 # ============================================================
 # 2. S&P 500 (Stooq)
 # ============================================================
+def _spx_from_fred():
+    """FRED公式CSV (キー不要、直近10年分)"""
+    r = fetch("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500",
+              headers={"User-Agent": "Mozilla/5.0 market-monitor"})
+    df = pd.read_csv(io.StringIO(r.text))
+    df = df.iloc[:, :2]
+    df.columns = ["date", "close"]  # 列名は DATE/observation_date 両対応
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    return df.dropna()
+
+
+def _spx_from_stooq():
+    r = fetch("https://stooq.com/q/d/l/?s=%5Espx&i=d",
+              headers={"User-Agent": "Mozilla/5.0 market-monitor"})
+    df = pd.read_csv(io.StringIO(r.text))
+    cols = {c.lower(): c for c in df.columns}
+    if "date" not in cols or "close" not in cols:
+        raise ValueError(f"Stooq想定外の列: {list(df.columns)[:5]}")
+    df = df.rename(columns={cols["date"]: "date", cols["close"]: "close"})
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    return df[["date", "close"]].dropna()
+
+
 def update_spx():
-    try:
-        r = fetch("https://stooq.com/q/d/l/?s=%5Espx&i=d")
-        spx = pd.read_csv(io.StringIO(r.text), parse_dates=["Date"])
-        spx = spx.rename(columns={"Date": "date", "Close": "close"})
-        spx = spx[["date", "close"]].dropna()
-        if len(spx) > 1000:
-            spx.to_csv(SPX_CSV, index=False)
-            log(f"SPX: {len(spx)}日 (〜{spx['date'].max().date()})")
-            return spx
-        raise ValueError("Stooqの返却データが短すぎます")
-    except Exception as e:
-        warnings.append(f"S&P 500取得失敗 ({e}) — 前回キャッシュを使用")
-        if os.path.exists(SPX_CSV):
-            return pd.read_csv(SPX_CSV, parse_dates=["date"])
-        return pd.DataFrame(columns=["date", "close"])
+    for name, fn, min_len in [("FRED", _spx_from_fred, 500),
+                              ("Stooq", _spx_from_stooq, 1000)]:
+        try:
+            spx = fn()
+            if len(spx) >= min_len:
+                spx.to_csv(SPX_CSV, index=False)
+                log(f"SPX({name}): {len(spx)}日 (〜{spx['date'].max().date()})")
+                return spx
+            raise ValueError(f"{name}の返却が短すぎます ({len(spx)}行)")
+        except Exception as e:
+            log(f"SPX {name} 失敗: {e}")
+            last = e
+    warnings.append(f"S&P 500取得失敗 ({last}) — 前回キャッシュを使用")
+    if os.path.exists(SPX_CSV):
+        return pd.read_csv(SPX_CSV, parse_dates=["date"])
+    return pd.DataFrame(columns=["date", "close"])
 
 
 # ============================================================
