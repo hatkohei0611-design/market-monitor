@@ -1,9 +1,47 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Market Monitor</title></head>
-<body style="font-family:sans-serif;padding:30px">
-<h2>Market Monitor — 初回実行待ち</h2>
-<p>GitHubの「Actions」タブから daily-update を手動実行(Run workflow)すると、
-このページがダッシュボードに置き換わります。</p>
+<title>Market Monitor</title>
+<style>
+ body{font-family:'Hiragino Sans','Yu Gothic',sans-serif;margin:0;background:#f4f6f9;color:#222}
+ header{background:#1a3a6b;color:#fff;padding:14px 18px}
+ header h1{font-size:18px;margin:0} header .sub{font-size:11px;opacity:.8}
+ main{max-width:860px;margin:0 auto;padding:14px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+ .card{background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+ .card.state{color:#fff}
+ .lbl{font-size:11px;opacity:.75} .big{font-size:26px;font-weight:bold;margin:4px 0}
+ .unit{font-size:13px;font-weight:normal} .small{font-size:11px;opacity:.8;line-height:1.5}
+ .warn{background:#fff6e5;border:1px solid #e0b95e;border-radius:8px;padding:10px 14px;margin:12px 0;font-size:12px}
+ .warn ul{margin:6px 0 0 18px;padding:0}
+ img{width:100%;border-radius:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08);margin:10px 0}
+ footer{font-size:10.5px;color:#777;padding:14px;line-height:1.6}
+</style></head><body>
+<header><h1>Market Monitor — インサイダー密度ステート</h1>
+<div class="sub">最終更新: 2026-06-11 22:27 JST (13:27 UTC) / データ: SEC EDGAR + Stooq</div></header>
+<main>
+
+  <div class="grid">
+    <div class="card state" style="background:#2a7d4f">
+      <div class="lbl">現在のステート</div>
+      <div class="big">① 平常</div>
+      <div class="small">シグナルなし。通常運用</div>
+    </div>
+    <div class="card"><div class="lbl">クラスター密度</div>
+      <div class="big">0 <span class="unit">/63日</span></div>
+      <div class="small">閾値: 警戒6 / パニック21</div></div>
+    <div class="card"><div class="lbl">本日の比率 (2026-03-31)</div>
+      <div class="big">0.427</div>
+      <div class="small">buy 35 / sell 82</div></div>
+    <div class="card"><div class="lbl">S&amp;P 500 DD (—)</div>
+      <div class="big">+0.0%</div>
+      <div class="small">終値 0 / 252日高値比</div></div>
+  </div>
+<div class="warn"><b>⚠ データ注意事項</b><ul><li>2026-04-01: EDGAR取得エラー (403 Client Error: Forbidden for url: https://www.sec.gov/Archives/edgar/daily-index/2026/QTR2/form.040126.idx) — 次回再試行</li><li>S&P 500取得失敗 (Missing column provided to 'parse_dates': 'Date') — 前回キャッシュを使用</li></ul></div>
+<img src="chart_insider.png" alt="insider">
+<img src="chart_spx.png" alt="spx">
+</main>
+<footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy filings / sell filings (NONDERIVのP/S・filing単位・提出日ベース)。
+クラスター密度 = 過去63営業日における比率&gt;1.0の日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
+本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
 </body></html>
