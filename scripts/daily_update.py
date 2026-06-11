@@ -77,6 +77,11 @@ def fetch(url, ok404=False, headers=None, tries=4):
         time.sleep(REQ_INTERVAL)
         if r.status_code == 404 and ok404:
             return None
+        if r.status_code == 403 and "<Code>AccessDenied</Code>" in r.text[:400]:
+            # S3形式のAccessDenied = ファイル不存在 (休場日・未公開日)
+            if ok404:
+                return None
+            r.raise_for_status()
         if r.status_code in (403, 429, 500, 502, 503) and i < tries - 1:
             log(f"  HTTP {r.status_code} -> {4*(i+1)}秒待って再試行 ({url[-40:]})")
             time.sleep(4 * (i + 1))
@@ -131,7 +136,7 @@ def process_day(day):
     """1営業日分のForm 4を集計。戻り値 (buy, sell) / 休日はNone"""
     q = (day.month - 1) // 3 + 1
     idx_url = (f"https://www.sec.gov/Archives/edgar/daily-index/"
-               f"{day.year}/QTR{q}/form.{day:%m%d%y}.idx")
+               f"{day.year}/QTR{q}/form.{day:%Y%m%d}.idx")
     r = fetch(idx_url, ok404=True)
     if r is None:
         return None  # 休日・週末
@@ -399,7 +404,7 @@ def build_html(res):
  footer{{font-size:10.5px;color:#777;padding:14px;line-height:1.6}}
 </style></head><body>
 <header><h1>Market Monitor — インサイダー密度ステート</h1>
-<div class="sub">最終更新: {now_jst:%Y-%m-%d %H:%M} JST ({now_utc:%H:%M} UTC) / データ: SEC EDGAR + Stooq</div></header>
+<div class="sub">最終更新: {now_jst:%Y-%m-%d %H:%M} JST ({now_utc:%H:%M} UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
 <main>
 {cards}
 {warn_html}
