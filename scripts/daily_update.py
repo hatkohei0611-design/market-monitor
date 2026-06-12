@@ -1031,15 +1031,18 @@ def exp_panel(reg, istats, res, v1):
     if reg:
         cum = (1 + reg["pred"]) ** 10 - 1
         if cum >= 0.20:
-            mood, mcol, mbg = "🟢 強気", "#7ce3ae", "rgba(47,174,116,.13)"
+            mood = "🟢 強気"
+            style = 'class="card state" style="background:linear-gradient(135deg,#1f9d68,#0d5436)"'
         elif cum <= -0.10:
-            mood, mcol, mbg = "🔴 弱気", "#f09a9a", "rgba(226,86,86,.13)"
+            mood = "🔴 弱気"
+            style = 'class="card state" style="background:linear-gradient(135deg,#e25656,#5e1414)"'
         else:
-            mood, mcol, mbg = "⚪ 中立", "var(--ink)", "rgba(255,255,255,.04)"
+            mood = "⚪ 中立"
+            style = 'class="card"'
         cards += f"""
-    <div class="card" style="background:{mbg};border-color:{mcol}33">
+    <div {style}>
       <div class="lbl">③ AIAE 10年回帰 (現在値 {reg['cur']*100:.1f}%) — {mood}</div>
-      <div class="big" style="color:{mcol}">{_fmt_pct(cum)}<span class="unit"> /10年累積</span></div>
+      <div class="big">{_fmt_pct(cum)}<span class="unit"> /10年累積</span></div>
       <div class="small">年率換算 {_fmt_pct(reg['pred'])}/年 / R²={reg['r2']:.2f} / n={reg['n']}四半期<br>
       Z.1全史×S&amp;P500価格・毎日再計算。配当除く・in-sample<br>
       判定: 累積+20%以上=強気 / -10%以下=弱気 / 中間=中立</div></div>"""
@@ -1053,18 +1056,77 @@ def exp_panel(reg, istats, res, v1):
 先行リターンは重複標本のため統計的独立性なし。</div>"""
 
 
+def make_v1_chart(aiae):
+    """V1スコアとMD/M2の推移 (2025-12以降の月次再構成 + 日次実測の接続)"""
+    try:
+        if not (os.path.exists(MDM2_CSV) and os.path.exists(HB_CSV) and aiae):
+            return False
+        mm = pd.read_csv(MDM2_CSV, parse_dates=["date"]).set_index("date")["mdm2_v1"]
+        hb = pd.read_csv(HB_CSV, parse_dates=["date"])
+        q = aiae["q"]["aiae"]
+        rows = []
+        for d, mv in mm.items():
+            hb6 = hb[(hb["date"] > d - pd.Timedelta(days=182)) &
+                     (hb["date"] <= d)]["signals"].sum()
+            av = q[q.index <= d]
+            if not len(av):
+                continue
+            v1 = max(0, (mv - 4000) / 50) + hb6 + max(0, float(av.iloc[-1]) * 100 - 50)
+            rows.append((d, v1, mv))
+        m = pd.DataFrame(rows, columns=["date", "v1", "mdm2"]).sort_values("date")
+        hist_f = os.path.join(ROOT, "data", "score_history.csv")
+        h = (pd.read_csv(hist_f, parse_dates=["date"]).dropna(subset=["v1"])
+             if os.path.exists(hist_f) else pd.DataFrame(columns=["date", "v1", "mdm2"]))
+        fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6.4), sharex=True,
+                                     gridspec_kw={"height_ratios": [3, 2]})
+        a1.axhspan(35, 50, color="#cd3a3a", alpha=.10)
+        a1.axhspan(50, 100, color="#7d1f1f", alpha=.12)
+        a1.axhline(35, color="#cd3a3a", lw=1, ls="--", alpha=.8)
+        a1.plot(m["date"], m["v1"], "o-", color="#2b5aa0", lw=1.8, ms=5,
+                label="月次再構成 (md_raw×M2 + HBシード + AIAE公式)")
+        if len(h):
+            a1.plot(h["date"], h["v1"], "-", color="#cd3a3a", lw=2,
+                    label="日次実測 (2026-06-12〜)")
+        a1.set_ylim(0, max(60, m["v1"].max() + 8))
+        a1.set_ylabel("V1スコア")
+        a1.set_title("V1天井スコアとMD/M2の推移 (2025-12〜 / 35=真の天井境界)")
+        a1.legend(fontsize=8, loc="lower right")
+        a1.grid(alpha=.25)
+        a2.axhline(4000, color="#cc8833", lw=1, ls="--", alpha=.7)
+        a2.axhline(5000, color="#cd3a3a", lw=1, ls="--", alpha=.7)
+        a2.plot(m["date"], m["mdm2"], "o-", color="#1e8a5a", lw=1.8, ms=5)
+        if len(h) and "mdm2" in h.columns and h["mdm2"].notna().any():
+            a2.plot(h["date"], h["mdm2"], "-", color="#1e8a5a", lw=1.5, alpha=.6)
+        a2.set_ylabel("MD/M2")
+        a2.grid(alpha=.25)
+        a2.annotate("4000=警戒 / 5000=過去天井圏", xy=(0.01, 0.05),
+                    xycoords="axes fraction", fontsize=8, color="#666")
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        fig.savefig(os.path.join(DOCS, "chart_v1.png"), dpi=110)
+        plt.close(fig)
+        return True
+    except Exception as e:
+        log(f"V1チャート作成失敗: {e}")
+        return False
+
+
 def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=None):
     now_utc = dt.datetime.utcnow()
     now_jst = now_utc + dt.timedelta(hours=9)
     if res:
         name, color, advice = res["state"]
         ratio_s = f"{res['ratio']:.3f}" if res["ratio"] is not None else "—"
-        grad = {"#2a7d4f": "linear-gradient(135deg,#1f9d68,#0d5436)",
-                "#cc8833": "linear-gradient(135deg,#e0954a,#8a4d10)",
-                "#cc3333": "linear-gradient(135deg,#e25656,#7c1a1a)"}.get(color, color)
+        # ①平常は点灯ではないので無彩色、②警戒=橙、③パニック=緑(分割買い局面)
+        grad = {"#cc8833": "linear-gradient(135deg,#e0954a,#8a4d10)",
+                "#cc3333": "linear-gradient(135deg,#1f9d68,#0d5436)"}.get(color)
+        if grad:
+            st_open = f'<div class="card state" style="background:{grad}">'
+        else:
+            st_open = '<div class="card">'
         cards = f"""
   <div class="grid">
-    <div class="card state" style="background:{grad}">
+    {st_open}
       <div class="lbl">現在のステート</div>
       <div class="big">{name}</div>
       <div class="small">{advice}</div>
@@ -1103,6 +1165,7 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 <img class="chart" src="chart_insider.png" alt="insider">
 <img class="chart" src="chart_spx.png" alt="spx">
 <img class="chart" src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
+<img class="chart" src="chart_v1.png" alt="v1" onerror="this.style.display='none'">
 </main>
 <footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy/sell filings (NONDERIV P/S・filing単位・提出日)。
 クラスター密度 = 過去63営業日の比率&gt;1.0日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
@@ -1152,6 +1215,7 @@ def main():
         log(f"スコア履歴ロギング失敗: {e}")
     if res:
         make_charts(res, aiae)
+    make_v1_chart(aiae)
     build_html(res, aiae, v1, hbc, holv, reg, istats)
     log("dashboard generated")
     for w in warnings:
