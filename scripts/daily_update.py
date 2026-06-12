@@ -624,6 +624,117 @@ def compute_v1(mdm2, aiae, hbc):
 
 
 # ============================================================
+# 2.7 期待値モニター: 長期SPX / AIAE 10Y回帰 / 密度バケット統計
+# ============================================================
+SPXLONG_CSV = os.path.join(ROOT, "data", "spx_long.csv")
+
+
+def update_spx_long():
+    """Yahooから日次の全履歴(1927-)を取得。キャッシュ7日有効"""
+    if os.path.exists(SPXLONG_CSV):
+        c = pd.read_csv(SPXLONG_CSV, parse_dates=["date"])
+        if c["date"].max() > pd.Timestamp.now() - pd.Timedelta(days=7):
+            return c
+    try:
+        r = fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
+                  "?range=max&interval=1d", headers=BROWSER_HEADERS, timeout=60)
+        j = r.json()["chart"]["result"][0]
+        df = pd.DataFrame({"date": pd.to_datetime(j["timestamp"], unit="s").normalize(),
+                           "close": j["indicators"]["quote"][0]["close"]}).dropna()
+        df = df.drop_duplicates("date").sort_values("date")
+        if len(df) > 5000:
+            df.to_csv(SPXLONG_CSV, index=False)
+            log(f"SPX長期: {len(df)}日 ({df['date'].min().date()}〜)")
+            return df
+        raise ValueError(f"長期SPXが短すぎます ({len(df)}行)")
+    except Exception as e:
+        warnings.append(f"SPX長期履歴の取得失敗 ({e}) — 期待値モニター一部停止")
+        if os.path.exists(SPXLONG_CSV):
+            return pd.read_csv(SPXLONG_CSV, parse_dates=["date"])
+        return None
+
+
+def aiae_regression(aiae, spxl):
+    """AIAE四半期 vs 10年先S&P500年率リターン(価格)のOLS。毎日再計算"""
+    if aiae is None or spxl is None or len(spxl) < 3000:
+        return None
+    try:
+        q = aiae["q"]["aiae"].copy()
+        m = spxl.set_index("date")["close"].resample("ME").last().dropna()
+        rows = []
+        for t, x in q.items():
+            t0 = t + pd.offsets.MonthEnd(0)
+            t1 = t0 + pd.DateOffset(years=10)
+            if t0 in m.index:
+                f = m[m.index >= t1]
+                if len(f):
+                    rows.append((float(x), (float(f.iloc[0]) / float(m[t0])) ** 0.1 - 1))
+        if len(rows) < 40:
+            return None
+        import numpy as np
+        x = np.array([r[0] for r in rows]); y = np.array([r[1] for r in rows])
+        slope, icpt = np.polyfit(x, y, 1)
+        r2 = float(np.corrcoef(x, y)[0, 1] ** 2)
+        cur = aiae.get("rt_val", aiae["q_val"])
+        pred = slope * cur + icpt
+        return {"pred": float(pred), "r2": r2, "n": len(rows),
+                "cur": cur, "last_q": str(q.index[-1].date())}
+    except Exception as e:
+        log(f"AIAE回帰エラー: {e}")
+        return None
+
+
+def insider_bucket_stats(df, spxl):
+    """密度バケット別の先行リターン統計(全履歴から毎日再計算)"""
+    if df is None or len(df) < 300 or spxl is None:
+        return None
+    try:
+        d = df.sort_values("date").copy()
+        s = spxl.sort_values("date").reset_index(drop=True)
+        d = pd.merge_asof(d, s.rename(columns={"close": "px"}), on="date")
+        d["idx"] = d["date"].map(
+            {dt_: i for i, dt_ in enumerate(s["date"])})
+        d = d.dropna(subset=["idx", "px"])
+        px = s["close"].values
+        def fwd(i, h):
+            i = int(i)
+            return px[i + h] / px[i] - 1 if i + h < len(px) else None
+        d["f6"] = d["idx"].map(lambda i: fwd(i, 126))
+        d["f12"] = d["idx"].map(lambda i: fwd(i, 252))
+        def bucket(v):
+            return "21+" if v >= 21 else ("6-20" if v >= 6 else
+                                          ("1-5" if v >= 1 else "0"))
+        d["bk"] = d["density"].map(bucket)
+        out = {}
+        for bk, g in d.dropna(subset=["f12"]).groupby("bk"):
+            out[bk] = {"n": len(g),
+                       "m6": float(g["f6"].mean()), "w6": float((g["f6"] > 0).mean()),
+                       "m12": float(g["f12"].mean()), "w12": float((g["f12"] > 0).mean())}
+        return out
+    except Exception as e:
+        log(f"密度統計エラー: {e}")
+        return None
+
+
+# V1バケット統計 (2026-05レポート固定値: 過去のMD/M2・HB月次系列が
+# リポジトリにないため再計算不可。較正の出典を明示して固定表示)
+V1_BUCKETS = [
+    (0, 15, "0-15 通常市場", "+11〜17%", "86-96%", 215),
+    (15, 25, "15-25 注意(2022型)", "-0.3〜-4.3%", "40-50%", 37),
+    (25, 35, "25-35 偽信号警戒", "-5.6%", "53%", 17),
+    (35, 50, "35-50 真の天井域", "-27.1%", "0%", 17),
+    (50, 999, "50+ 史上級(2000型)", "-15.9%", "0%", 9),
+]
+
+
+def v1_bucket_row(total):
+    for lo, hi, name, cagr, win, n in V1_BUCKETS:
+        if lo <= total < hi:
+            return {"name": name, "cagr": cagr, "win": win, "n": n}
+    return None
+
+
+# ============================================================
 # 3. 指標計算とステート判定
 # ============================================================
 def compute(df, spx):
@@ -731,17 +842,67 @@ def make_charts(res, aiae=None):
     return True
 
 
-def aiae_card(aiae):
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800&family=Noto+Sans+JP:wght@400;500;700;900&display=swap');
+:root{--navy:#16243f;--blue:#2b5aa0;--ink:#1c2433;--mut:#69748a;--bg:#eef1f7;
+--ok:#1e8a5a;--warn:#d07f2e;--bad:#cd3a3a;--card:#ffffff}
+*{box-sizing:border-box}
+body{font-family:'Noto Sans JP','Inter',sans-serif;margin:0;background:var(--bg);color:var(--ink)}
+header{background:linear-gradient(120deg,#101c33,#1b3158 55%,#27548f);color:#fff;padding:26px 22px 22px}
+header h1{font-size:21px;margin:0;font-weight:900;letter-spacing:.02em}
+header .sub{font-size:11.5px;opacity:.75;margin-top:6px;font-weight:500}
+main{max-width:980px;margin:0 auto;padding:18px 16px 30px}
+h2.sec{font-size:13.5px;margin:22px 0 10px;color:var(--navy);font-weight:900;
+display:flex;align-items:center;gap:8px}
+h2.sec::before{content:"";width:10px;height:10px;border-radius:3px;background:var(--blue)}
+h2.sec.top::before{background:var(--bad)}
+h2.sec.exp::before{background:#7a4fd0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px}
+.card{background:var(--card);border-radius:14px;padding:15px 16px;
+box-shadow:0 2px 10px rgba(22,36,63,.07);border:1px solid rgba(22,36,63,.05)}
+.card.state{color:#fff;border:none}
+.lbl{font-size:10.5px;color:var(--mut);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.card.state .lbl{color:rgba(255,255,255,.75)}
+.big{font-size:30px;font-weight:800;font-family:'Inter','Noto Sans JP',sans-serif;
+margin:5px 0 3px;line-height:1.1}
+.unit{font-size:13px;font-weight:500;color:var(--mut)}
+.small{font-size:11px;color:var(--mut);line-height:1.65}
+.card.state .small{color:rgba(255,255,255,.85)}
+.bar{height:8px;border-radius:99px;background:#e7ebf3;margin:9px 0 4px;position:relative}
+.bar>i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;
+background:linear-gradient(90deg,#1e8a5a,#d0b32e 45%,#cd3a3a 70%)}
+.bar>b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#16243f;left:58.3%}
+.note{background:#eef2fa;border:1px solid #c5d2ea;border-radius:12px;
+padding:11px 15px;font-size:11.5px;line-height:1.8;margin:13px 0;color:#2c3a55}
+.warnbox{background:#fff7e8;border:1px solid #e6c386;border-radius:12px;
+padding:11px 15px;font-size:11.5px;margin:13px 0;color:#5d4310}
+.warnbox ul{margin:5px 0 0 17px;padding:0}
+.warnbox li{margin:3px 0}
+img.chart{width:100%;border-radius:14px;background:#fff;
+box-shadow:0 2px 10px rgba(22,36,63,.07);margin:12px 0 2px}
+.fineprint{font-size:10px;color:#8a93a6;line-height:1.7;margin-top:4px}
+footer{font-size:10px;color:#8a93a6;padding:18px 22px 26px;line-height:1.8;max-width:980px;margin:0 auto}
+"""
+
+
+def _fmt_pct(v, digits=1):
+    return f"{v*100:+.{digits}f}%"
+
+
+def aiae_card(aiae, reg):
     if not aiae:
         return ""
     rt = ""
     if "rt_val" in aiae:
-        rt = (f"リアルタイム近似 {aiae['rt_val']*100:.1f}% "
-              f"(歴史パーセンタイル {aiae['rt_pct']*100:.0f}%)")
-    return (f'<div class="card"><div class="lbl">AIAE '
-            f'(公式 {aiae["q_date"]})</div>'
-            f'<div class="big">{aiae["q_val"]*100:.1f}%</div>'
-            f'<div class="small">{rt}</div></div>')
+        rt = (f"リアルタイム近似 <b>{aiae['rt_val']*100:.1f}%</b>"
+              f" / 歴史Pct {aiae['rt_pct']*100:.0f}%")
+    pred = ""
+    if reg:
+        pred = (f"<br>10Y期待 <b>{_fmt_pct(reg['pred'])}/年</b>"
+                f" (R²={reg['r2']:.2f}, n={reg['n']})")
+    return (f'<div class="card"><div class="lbl">AIAE 公式 {aiae["q_date"]}</div>'
+            f'<div class="big">{aiae["q_val"]*100:.1f}<span class="unit">%</span></div>'
+            f'<div class="small">{rt}{pred}</div></div>')
 
 
 def top_panel(v1, hbc, holv):
@@ -749,97 +910,126 @@ def top_panel(v1, hbc, holv):
         return ""
     cards = ""
     if v1:
+        pos = min(98, v1["total"] / 60 * 100)
+        bk = v1_bucket_row(v1["total"])
+        bkrow = (f"点灯時1Y期待 <b>{bk['cagr']}</b> / 勝率{bk['win']} (n={bk['n']},"
+                 f" 2026-05レポート固定値)") if bk else ""
         cards += f"""
-    <div class="card state" style="background:{v1['color']}">
-      <div class="lbl">V1天井スコア</div>
+    <div class="card state" style="background:linear-gradient(135deg,{v1['color']},#7d1f1f)">
+      <div class="lbl">V1 天井スコア</div>
       <div class="big">{v1['total']:.1f}</div>
-      <div class="small">{v1['bucket']}<br>
-      MD/M2 {v1['md']:.1f} + HB {v1['hb']:.0f} + AIAE {v1['ai']:.1f}</div>
+      <div class="bar" style="background:rgba(255,255,255,.25)"><i style="width:{pos}%"></i><b></b></div>
+      <div class="small">{v1['bucket']}<br>MD/M2 {v1['md']:.1f} + HB {v1['hb']:.0f} + AIAE {v1['ai']:.1f}<br>{bkrow}</div>
     </div>
-    <div class="card"><div class="lbl">MD/M2 (FINRA {v1['mdm2']['date']})</div>
+    <div class="card"><div class="lbl">MD/M2 — FINRA {v1['mdm2']['date']}</div>
       <div class="big">{v1['mdm2']['val']:,.0f}</div>
-      <div class="small">警戒4000 / 過去天井5000超 (2000:6366 / 2007:5690)</div></div>"""
+      <div class="small">警戒4000 / 過去天井5000超<br>(2000:6366 / 2007:5690 / 2026-01:5703)</div></div>"""
     if hbc is not None and holv is not None:
         lv, name, color = holv
         cards += f"""
     <div class="card"><div class="lbl">HOクラスター判定</div>
-      <div class="big" style="color:{color}">Lv{lv} {name.split(' ')[0]}</div>
+      <div class="big" style="color:{color}">Lv{lv}<span class="unit"> {name.split(' ')[0]}</span></div>
       <div class="small">3M:{hbc['3m']} / 6M:{hbc['6m']} / 12M:{hbc['12m']}<br>
-      閾値(合算): Watch 6M≧8 / Warning 3M≧10 / Alarm 3M≧16</div></div>"""
+      Watch 6M≧8 / Warning 3M≧10 / Alarm 3M≧16</div></div>"""
     return f"""
-  <h2 style="font-size:14px;margin:18px 0 8px;color:#1a3a6b">📈 天井側 — V1スコアモデル</h2>
-  <div class="grid">{cards}</div>
-  <div class="warn" style="background:#eef2f8;border-color:#aabbd4">
-  <b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)に依拠。HB過去分は目視集約シード(定義混成)、
-  2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)。AIAE項はFRED公式系列(Z.1)用に閾値50へ再較正
-  (旧較正のTradingView系列とは別物のため、2026-03アンカーで接続)。HB/AIAEとも接続点に定義不連続あり。
-  点推定ではなく方向性として読むこと。</div>"""
+<h2 class="sec top">天井側 — V1スコアモデル</h2>
+<div class="grid">{cards}</div>
+<div class="note"><b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)。
+HB過去分は目視集約シード、2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)。
+AIAE項はFRED公式系列用に閾値50へ再較正(2026-03アンカー接続)。点灯時期待値は固定のバックテスト値であり、
+HB/AIAEの定義不連続を含む。点推定ではなく方向性として読むこと。</div>"""
 
 
-def build_html(res, aiae=None, v1=None, hbc=None, holv=None):
+def exp_panel(reg, istats, res):
+    if not reg and not istats:
+        return ""
+    cards = ""
+    if istats and res:
+        cur_bk = "21+" if res["density"] >= 21 else (
+            "6-20" if res["density"] >= 6 else ("1-5" if res["density"] >= 1 else "0"))
+        s21 = istats.get("21+")
+        if s21:
+            lit = "🔔 点灯中" if cur_bk == "21+" else "未点灯(参考値)"
+            cards += f"""
+    <div class="card"><div class="lbl">③パニック(密度21+)点灯時 — {lit}</div>
+      <div class="big">{_fmt_pct(s21['m12'])}<span class="unit"> /12M</span></div>
+      <div class="small">勝率{s21['w12']*100:.0f}% / 6M {_fmt_pct(s21['m6'])} (勝率{s21['w6']*100:.0f}%)
+      / n={s21['n']}日<br>全履歴(2006-)から毎日再計算。独立イベントは実質3-4回</div></div>"""
+        sc = istats.get(cur_bk)
+        if sc and cur_bk != "21+":
+            cards += f"""
+    <div class="card"><div class="lbl">現在の密度バケット ({cur_bk}) の歴史統計</div>
+      <div class="big">{_fmt_pct(sc['m12'])}<span class="unit"> /12M</span></div>
+      <div class="small">勝率{sc['w12']*100:.0f}% / 6M {_fmt_pct(sc['m6'])} / n={sc['n']}日
+      (毎日再計算)</div></div>"""
+    if reg:
+        cards += f"""
+    <div class="card"><div class="lbl">AIAE 10年回帰 (現在値 {reg['cur']*100:.1f}%)</div>
+      <div class="big">{_fmt_pct(reg['pred'])}<span class="unit"> /年×10Y</span></div>
+      <div class="small">R²={reg['r2']:.2f} / n={reg['n']}四半期 (Z.1全史×S&amp;P500価格、毎日再計算)<br>
+      配当除く価格リターン。サンプル重複あり・in-sample値</div></div>"""
+    return f"""
+<h2 class="sec exp">期待値モニター</h2>
+<div class="grid">{cards}</div>
+<div class="fineprint">※ 先行リターンは重複標本のため統計的独立性なし。AIAEのR²はin-sample。
+V1点灯時期待のみバックテスト固定値(過去のMD/M2・HB月次系列が必要なため再計算非対応と明記)。</div>"""
+
+
+def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=None):
     now_utc = dt.datetime.utcnow()
     now_jst = now_utc + dt.timedelta(hours=9)
     if res:
         name, color, advice = res["state"]
         ratio_s = f"{res['ratio']:.3f}" if res["ratio"] is not None else "—"
+        grad = {"#2a7d4f": "linear-gradient(135deg,#1e8a5a,#136443)",
+                "#cc8833": "linear-gradient(135deg,#d07f2e,#a05a14)",
+                "#cc3333": "linear-gradient(135deg,#cd3a3a,#8b1f1f)"}.get(color, color)
         cards = f"""
   <div class="grid">
-    <div class="card state" style="background:{color}">
+    <div class="card state" style="background:{grad}">
       <div class="lbl">現在のステート</div>
       <div class="big">{name}</div>
       <div class="small">{advice}</div>
     </div>
     <div class="card"><div class="lbl">クラスター密度</div>
-      <div class="big">{res['density']} <span class="unit">/63日</span></div>
+      <div class="big">{res['density']}<span class="unit"> /63日</span></div>
       <div class="small">閾値: 警戒6 / パニック21</div></div>
     <div class="card"><div class="lbl">本日の比率 ({res['date']})</div>
       <div class="big">{ratio_s}</div>
       <div class="small">buy {res['buy']} / sell {res['sell']}</div></div>
     <div class="card"><div class="lbl">S&amp;P 500 DD ({res.get('spx_date','—')})</div>
-      <div class="big">{res.get('dd', 0)*100:+.1f}%</div>
+      <div class="big">{res.get('dd', 0)*100:+.1f}<span class="unit">%</span></div>
       <div class="small">終値 {res.get('spx_close', 0):,.0f} / 252日高値比</div></div>
-    {aiae_card(aiae)}
+    {aiae_card(aiae, reg)}
   </div>"""
     else:
-        cards = "<p>データ未取得。Actionsの実行ログを確認してください。</p>"
+        cards = "<p>データ未取得。Actionsのログを確認してください。</p>"
     warn_html = ""
     if warnings:
         items = "".join(f"<li>{w}</li>" for w in warnings)
-        warn_html = f'<div class="warn"><b>⚠ データ注意事項</b><ul>{items}</ul></div>'
+        warn_html = f'<div class="warnbox"><b>⚠ データ注意事項</b><ul>{items}</ul></div>'
     html = f"""<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Market Monitor</title>
-<style>
- body{{font-family:'Hiragino Sans','Yu Gothic',sans-serif;margin:0;background:#f4f6f9;color:#222}}
- header{{background:#1a3a6b;color:#fff;padding:14px 18px}}
- header h1{{font-size:18px;margin:0}} header .sub{{font-size:11px;opacity:.8}}
- main{{max-width:860px;margin:0 auto;padding:14px}}
- .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}
- .card{{background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
- .card.state{{color:#fff}}
- .lbl{{font-size:11px;opacity:.75}} .big{{font-size:26px;font-weight:bold;margin:4px 0}}
- .unit{{font-size:13px;font-weight:normal}} .small{{font-size:11px;opacity:.8;line-height:1.5}}
- .warn{{background:#fff6e5;border:1px solid #e0b95e;border-radius:8px;padding:10px 14px;margin:12px 0;font-size:12px}}
- .warn ul{{margin:6px 0 0 18px;padding:0}}
- img{{width:100%;border-radius:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08);margin:10px 0}}
- footer{{font-size:10.5px;color:#777;padding:14px;line-height:1.6}}
-</style></head><body>
-<header><h1>Market Monitor — インサイダー密度ステート</h1>
-<div class="sub">最終更新: {now_jst:%Y-%m-%d %H:%M} JST ({now_utc:%H:%M} UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
+<style>{CSS}</style></head><body>
+<header><h1>Market Monitor</h1>
+<div class="sub">底値検出 × 天井警戒 の両面監視 / 最終更新 {now_jst:%Y-%m-%d %H:%M} JST
+ / SEC EDGAR · WSJ · FRED · Yahoo</div></header>
 <main>
-<h2 style="font-size:14px;margin:4px 0 8px;color:#1a3a6b">📉 底側 — インサイダー密度ステート</h2>
+<h2 class="sec">底側 — インサイダー密度ステート</h2>
 {cards}
 {top_panel(v1, hbc, holv)}
+{exp_panel(reg, istats, res)}
 {warn_html}
-<img src="chart_insider.png" alt="insider">
-<img src="chart_spx.png" alt="spx">
-<img src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
+<img class="chart" src="chart_insider.png" alt="insider">
+<img class="chart" src="chart_spx.png" alt="spx">
+<img class="chart" src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
 </main>
-<footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy filings / sell filings (NONDERIVのP/S・filing単位・提出日ベース)。
-クラスター密度 = 過去63営業日における比率&gt;1.0の日数。
-AIAE = 株式時価(NCBEILQ027S+FBCELLQ027S) ÷ (株式時価 + 5借入主体負債計)、Z.1公開ラグ2.5〜5.5ヶ月、リアルタイム近似は株式部分のみS&amp;P500で補正。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
-本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
+<footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy/sell filings (NONDERIV P/S・filing単位・提出日)。
+クラスター密度 = 過去63営業日の比率&gt;1.0日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
+AIAE = Z.1株式時価 ÷ (株式時価+5部門負債)、公開ラグ2.5-5.5ヶ月、RT近似は株式部分のみS&amp;P500補正。
+V1 = MD/M2スコア + HB6M信号数 + max(0, AIAE-50)。本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
 </body></html>"""
     with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
@@ -862,9 +1052,12 @@ def main():
     mdm2 = update_mdm2()
     v1 = compute_v1(mdm2, aiae, hbc)
     holv = ho_level(hbc)
+    spxl = update_spx_long()
+    reg = aiae_regression(aiae, spxl)
+    istats = insider_bucket_stats(res.get("df") if res else None, spxl)
     if res:
         make_charts(res, aiae)
-    build_html(res, aiae, v1, hbc, holv)
+    build_html(res, aiae, v1, hbc, holv, reg, istats)
     log("dashboard generated")
     for w in warnings:
         log(f"WARN: {w}")
