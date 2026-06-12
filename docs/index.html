@@ -18,7 +18,7 @@
  footer{font-size:10.5px;color:#777;padding:14px;line-height:1.6}
 </style></head><body>
 <header><h1>Market Monitor — インサイダー密度ステート</h1>
-<div class="sub">最終更新: 2026-06-12 17:22 JST (08:22 UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
+<div class="sub">最終更新: 2026-06-12 17:34 JST (08:34 UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
 <main>
 <h2 style="font-size:14px;margin:4px 0 8px;color:#1a3a6b">📉 底側 — インサイダー密度ステート</h2>
 
@@ -37,19 +37,30 @@
     <div class="card"><div class="lbl">S&amp;P 500 DD (2026-06-11)</div>
       <div class="big">-2.8%</div>
       <div class="small">終値 7,394 / 252日高値比</div></div>
-    
+    <div class="card"><div class="lbl">AIAE (公式 2026-01-01)</div><div class="big">52.9%</div><div class="small">リアルタイム近似 56.0% (歴史パーセンタイル 100%)</div></div>
   </div>
 
   <h2 style="font-size:14px;margin:18px 0 8px;color:#1a3a6b">📈 天井側 — V1スコアモデル</h2>
   <div class="grid">
+    <div class="card state" style="background:#cc3333">
+      <div class="lbl">V1天井スコア</div>
+      <div class="big">40.6</div>
+      <div class="small">35-50 真の天井域 (過去1Y勝率0%)<br>
+      MD/M2 27.6 + HB 7 + AIAE 6.0</div>
+    </div>
+    <div class="card"><div class="lbl">MD/M2 (FINRA 2026-03-01)</div>
+      <div class="big">5,382</div>
+      <div class="small">警戒4000 / 過去天井5000超 (2000:6366 / 2007:5690)</div></div>
     <div class="card"><div class="lbl">HOクラスター判定</div>
       <div class="big" style="color:#2a7d4f">Lv0 通常</div>
       <div class="small">3M:1 / 6M:7 / 12M:12<br>
       閾値(合算): Watch 6M≧8 / Warning 3M≧10 / Alarm 3M≧16</div></div></div>
   <div class="warn" style="background:#eef2f8;border-color:#aabbd4">
   <b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)に依拠。HB過去分は目視集約シード(定義混成)、
-  2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)で接続点に定義不連続あり。点推定ではなく方向性として読むこと。</div>
-<div class="warn"><b>⚠ データ注意事項</b><ul><li>AIAE計算値が異常 (0.1%, eq=91,857B/debt=81,810,014B) — ログのAIAE系列診断を参照</li><li>McClellan蓄積中 (1/39日) — HO判定は3条件版(暫定)</li><li>FINRA MD/M2取得失敗 (403 Client Error: Forbidden for url: https://www.finra.org/investors/learn-to-invest/advanced-investing/margin-statistics) — キャッシュ使用 (継続する場合は data/mdm2.csv に月1回手動追記)</li></ul></div>
+  2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)。AIAE項はFRED公式系列(Z.1)用に閾値50へ再較正
+  (旧較正のTradingView系列とは別物のため、2026-03アンカーで接続)。HB/AIAEとも接続点に定義不連続あり。
+  点推定ではなく方向性として読むこと。</div>
+<div class="warn"><b>⚠ データ注意事項</b><ul><li>McClellan蓄積中 (1/39日) — HO判定は3条件版(暫定)</li><li>FINRA MD/M2取得失敗 (403 Client Error: Forbidden for url: https://www.finra.org/investors/learn-to-invest/advanced-investing/margin-statistics) — キャッシュ使用 (継続する場合は data/mdm2.csv に月1回手動追記)</li></ul></div>
 <img src="chart_insider.png" alt="insider">
 <img src="chart_spx.png" alt="spx">
 <img src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
