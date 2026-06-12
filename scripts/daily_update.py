@@ -18,8 +18,10 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import matplotlib
 matplotlib.use("Agg")
@@ -36,6 +38,9 @@ STATE_JSON = os.path.join(ROOT, "data", "state.json")
 DOCS = os.path.join(ROOT, "docs")
 
 MAX_DAYS_PER_RUN = int(os.environ.get("MAX_DAYS", "8"))
+TIME_BUDGET_MIN = int(os.environ.get("TIME_BUDGET_MIN", "45"))  # これを超えたら保存して終了
+WORKERS = 5  # Form 4取得の並列数 (全体でSEC上限10req/sを遵守)
+START_TIME = time.time()
 CLUSTER_WIN = 63
 THRESH = 1.0
 REQ_INTERVAL = 0.13  # 約7.7req/s (SEC上限10req/sに余裕)
@@ -56,6 +61,18 @@ BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 SESSION = requests.Session()
+_rate_lock = threading.Lock()
+_last_req = [0.0]
+
+
+def _rate_limit():
+    """全スレッド共通で約7req/sに制限"""
+    with _rate_lock:
+        wait = _last_req[0] + REQ_INTERVAL - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _last_req[0] = time.time()
+
 
 warnings = []  # ダッシュボードに表示する警告
 
@@ -68,13 +85,13 @@ def fetch(url, ok404=False, headers=None, tries=4):
     """403/429/5xx は間隔を空けてリトライする"""
     last_err = None
     for i in range(tries):
+        _rate_limit()
         try:
-            r = SESSION.get(url, headers=headers or SEC_HEADERS, timeout=60)
+            r = SESSION.get(url, headers=headers or SEC_HEADERS, timeout=30)
         except requests.RequestException as e:
             last_err = e
-            time.sleep(4 * (i + 1))
+            time.sleep(2 * (i + 1))
             continue
-        time.sleep(REQ_INTERVAL)
         if r.status_code == 404 and ok404:
             return None
         if r.status_code == 403 and "<Code>AccessDenied</Code>" in r.text[:400]:
@@ -145,22 +162,29 @@ def process_day(day):
         parts = line.split()
         if len(parts) >= 4 and parts[0] in ("4", "4/A"):
             paths.append(parts[-1])
-    log(f"  {day:%Y-%m-%d}: Form4 {len(paths)}件を解析")
-    buy = sell = err = 0
-    for p in paths:
+    log(f"  {day:%Y-%m-%d}: Form4 {len(paths)}件を解析 ({WORKERS}並列)")
+    counts = {"buy": 0, "sell": 0, "err": 0}
+    lock = threading.Lock()
+
+    def work(p):
         try:
-            txt = fetch("https://www.sec.gov/Archives/" + p).text
+            txt = fetch("https://www.sec.gov/Archives/" + p, tries=2).text
             is_od, has_p, has_s = parse_form4(txt)
-            if is_od:
-                buy += int(has_p)
-                sell += int(has_s)
+            with lock:
+                if is_od:
+                    counts["buy"] += int(has_p)
+                    counts["sell"] += int(has_s)
         except Exception:
-            err += 1
-    if err:
-        log(f"  解析失敗 {err}件(続行)")
-        if err > len(paths) * 0.05:
-            warnings.append(f"{day:%Y-%m-%d}: Form4解析失敗が{err}件と多め")
-    return buy, sell
+            with lock:
+                counts["err"] += 1
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        list(ex.map(work, paths))
+    if counts["err"]:
+        log(f"  解析失敗 {counts['err']}件(続行)")
+        if counts["err"] > len(paths) * 0.05:
+            warnings.append(f"{day:%Y-%m-%d}: Form4解析失敗が{counts['err']}件と多め")
+    return counts["buy"], counts["sell"]
 
 
 def update_insider():
@@ -175,9 +199,11 @@ def update_insider():
     # EDGARの当日インデックスは米国時間夜に完成するため、2日前まで処理
     target_end = dt.date.today() - dt.timedelta(days=2)
     day = last + dt.timedelta(days=1)
-    done = 0
-    new_rows = []
+    done = added = 0
     while day <= target_end and done < MAX_DAYS_PER_RUN:
+        if (time.time() - START_TIME) > TIME_BUDGET_MIN * 60:
+            log(f"時間予算 {TIME_BUDGET_MIN}分に到達 — ここまでを保存して終了")
+            break
         if day.weekday() < 5:  # 平日のみ
             try:
                 res = process_day(day)
@@ -186,18 +212,19 @@ def update_insider():
                 log(f"  ERROR {day}: {e}")
                 break  # この日で停止し、次回ここから再開
             if res is not None:
-                new_rows.append({"date": pd.Timestamp(day),
-                                 "buy_filings": res[0],
-                                 "sell_filings": res[1]})
+                row = pd.DataFrame([{"date": pd.Timestamp(day),
+                                     "buy_filings": res[0],
+                                     "sell_filings": res[1]}])
+                df = pd.concat([df, row], ignore_index=True)
+                df = df.drop_duplicates("date", keep="last").sort_values("date")
+                df.to_csv(DATA_CSV, index=False, encoding="utf-8-sig")  # 1日ごと保存
+                added += 1
             done += 1
         st["last_processed"] = day.isoformat()
+        save_state(st)
         day += dt.timedelta(days=1)
-    if new_rows:
-        df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
-        df = df.drop_duplicates("date", keep="last").sort_values("date")
-        df.to_csv(DATA_CSV, index=False, encoding="utf-8-sig")
-        log(f"insider: {len(new_rows)}日分追加 (〜{df['date'].max().date()})")
-    save_state(st)
+    if added:
+        log(f"insider: {added}日分追加 (〜{df['date'].max().date()})")
     remaining = max(0, (target_end - dt.date.fromisoformat(
         st.get("last_processed", target_end.isoformat()))).days)
     if remaining > 2:
@@ -267,6 +294,83 @@ def update_spx():
 
 
 # ============================================================
+# 2.5 AIAE (Aggregate Investor Allocation to Equities)
+#     FRED Z.1 公式系列から構築 (過去検証: 2000Q1=51.59% vs 論文51.7%)
+#     株式時価 = NCBEILQ027S + FBCELLQ027S (百万ドル -> /1000で十億ドルに統一)
+#     負債計   = FGSDODNS + CMDEBT + BCNSDODNS + DODFFSWCMI + SLGSDODNS (十億ドル)
+#     AIAE = 株式 / (株式 + 負債)
+# ============================================================
+AIAE_CSV = os.path.join(ROOT, "data", "aiae.csv")
+AIAE_EQ = ["NCBEILQ027S", "FBCELLQ027S"]          # millions of $
+AIAE_DEBT = ["FGSDODNS", "CMDEBT", "BCNSDODNS",
+             "DODFFSWCMI", "SLGSDODNS"]            # billions of $
+
+
+def fred_series(sid):
+    """FRED系列を取得 (キー不要のfredgraph.csv。失敗時はFRED_API_KEYでAPI)"""
+    try:
+        r = fetch(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
+                  headers=BROWSER_HEADERS)
+        df = pd.read_csv(io.StringIO(r.text)).iloc[:, :2]
+        df.columns = ["date", "value"]
+    except Exception:
+        key = os.environ.get("FRED_API_KEY", "")
+        if not key:
+            raise
+        r = fetch("https://api.stlouisfed.org/fred/series/observations"
+                  f"?series_id={sid}&api_key={key}&file_type=json",
+                  headers=BROWSER_HEADERS)
+        obs = r.json()["observations"]
+        df = pd.DataFrame({"date": [o["date"] for o in obs],
+                           "value": [o["value"] for o in obs]})
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    return df.dropna().set_index("date")["value"].rename(sid)
+
+
+def update_aiae(spx):
+    """AIAE四半期系列 + S&P500補正のリアルタイム近似を返す"""
+    try:
+        cols = {}
+        for sid in AIAE_EQ + AIAE_DEBT:
+            cols[sid] = fred_series(sid)
+        z1 = pd.concat(cols.values(), axis=1).dropna()
+        eq = z1[AIAE_EQ].sum(axis=1) / 1000.0       # millions -> billions
+        debt = z1[AIAE_DEBT].sum(axis=1)
+        aiae = (eq / (eq + debt)).rename("aiae")
+        # 健全性チェック (歴史レンジは概ね 20%〜55%)
+        last = float(aiae.iloc[-1])
+        if not (0.15 < last < 0.70):
+            warnings.append(f"AIAE計算値が異常 ({last:.1%}) — 系列の単位/定義を要確認")
+            return None
+        out = pd.DataFrame({"aiae": aiae, "eq": eq, "debt": debt})
+        out.index.name = "date"
+        out.to_csv(AIAE_CSV)
+        log(f"AIAE: {len(out)}四半期 (最新 {out.index[-1].date()} = {last:.2%})")
+    except Exception as e:
+        warnings.append(f"AIAE取得失敗 ({e}) — 前回キャッシュを使用")
+        if os.path.exists(AIAE_CSV):
+            out = pd.read_csv(AIAE_CSV, parse_dates=["date"], index_col="date")
+        else:
+            return None
+    res = {"q": out, "q_date": out.index[-1].date(),
+           "q_val": float(out["aiae"].iloc[-1])}
+    # リアルタイム近似: 株式部分を四半期末からのS&P500変化率でスケール
+    if spx is not None and len(spx):
+        spx = spx.sort_values("date")
+        q_end = pd.Timestamp(out.index[-1]) + pd.offsets.QuarterEnd(0)
+        base = spx[spx["date"] <= q_end]["close"]
+        if len(base):
+            scale = float(spx["close"].iloc[-1]) / float(base.iloc[-1])
+            eq_adj = float(out["eq"].iloc[-1]) * scale
+            res["rt_val"] = eq_adj / (eq_adj + float(out["debt"].iloc[-1]))
+            res["rt_date"] = spx["date"].iloc[-1].date()
+            # 公式値の過去分布におけるリアルタイム値のパーセンタイル
+            res["rt_pct"] = float((out["aiae"] < res["rt_val"]).mean())
+    return res
+
+
+# ============================================================
 # 3. 指標計算とステート判定
 # ============================================================
 def compute(df, spx):
@@ -312,7 +416,7 @@ def compute(df, spx):
 # ============================================================
 # 4. ダッシュボード生成
 # ============================================================
-def make_charts(res):
+def make_charts(res, aiae=None):
     df = res.get("df")
     if df is None or len(df) < 5:
         return False
@@ -352,10 +456,42 @@ def make_charts(res):
         plt.tight_layout()
         plt.savefig(os.path.join(DOCS, "chart_spx.png"), dpi=110)
         plt.close()
+
+    if aiae is not None:
+        q = aiae["q"]
+        fig, ax = plt.subplots(figsize=(9, 4.2))
+        ax.plot(q.index, q["aiae"] * 100, color="#1a3a6b", lw=1.4,
+                label="AIAE (Z.1公式・四半期)")
+        if "rt_val" in aiae:
+            ax.scatter([pd.Timestamp(aiae["rt_date"])], [aiae["rt_val"] * 100],
+                       color="#cc3333", zorder=5, s=40,
+                       label=f"リアルタイム近似 {aiae['rt_val']*100:.1f}%")
+        med = q["aiae"].median() * 100
+        ax.axhline(med, color="gray", ls=":", lw=1, label=f"中央値 {med:.1f}%")
+        ax.set_ylabel("AIAE (%)")
+        ax.set_title("AIAE — 投資家の株式配分比率 (FRED Z.1)")
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(DOCS, "chart_aiae.png"), dpi=110)
+        plt.close()
     return True
 
 
-def build_html(res):
+def aiae_card(aiae):
+    if not aiae:
+        return ""
+    rt = ""
+    if "rt_val" in aiae:
+        rt = (f"リアルタイム近似 {aiae['rt_val']*100:.1f}% "
+              f"(歴史パーセンタイル {aiae['rt_pct']*100:.0f}%)")
+    return (f'<div class="card"><div class="lbl">AIAE '
+            f'(公式 {aiae["q_date"]})</div>'
+            f'<div class="big">{aiae["q_val"]*100:.1f}%</div>'
+            f'<div class="small">{rt}</div></div>')
+
+
+def build_html(res, aiae=None):
     now_utc = dt.datetime.utcnow()
     now_jst = now_utc + dt.timedelta(hours=9)
     if res:
@@ -377,6 +513,7 @@ def build_html(res):
     <div class="card"><div class="lbl">S&amp;P 500 DD ({res.get('spx_date','—')})</div>
       <div class="big">{res.get('dd', 0)*100:+.1f}%</div>
       <div class="small">終値 {res.get('spx_close', 0):,.0f} / 252日高値比</div></div>
+    {aiae_card(aiae)}
   </div>"""
     else:
         cards = "<p>データ未取得。Actionsの実行ログを確認してください。</p>"
@@ -410,9 +547,11 @@ def build_html(res):
 {warn_html}
 <img src="chart_insider.png" alt="insider">
 <img src="chart_spx.png" alt="spx">
+<img src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
 </main>
 <footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy filings / sell filings (NONDERIVのP/S・filing単位・提出日ベース)。
-クラスター密度 = 過去63営業日における比率&gt;1.0の日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
+クラスター密度 = 過去63営業日における比率&gt;1.0の日数。
+AIAE = 株式時価(NCBEILQ027S+FBCELLQ027S) ÷ (株式時価 + 5借入主体負債計)、Z.1公開ラグ2.5〜5.5ヶ月、リアルタイム近似は株式部分のみS&amp;P500で補正。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
 本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
 </body></html>"""
     with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
@@ -430,9 +569,10 @@ def main():
         df = load_insider()
     spx = update_spx()
     res = compute(df, spx)
+    aiae = update_aiae(spx)
     if res:
-        make_charts(res)
-    build_html(res)
+        make_charts(res, aiae)
+    build_html(res, aiae)
     log("dashboard generated")
     for w in warnings:
         log(f"WARN: {w}")
