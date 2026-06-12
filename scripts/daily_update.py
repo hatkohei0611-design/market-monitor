@@ -972,39 +972,60 @@ AIAE項はFRED公式系列用に閾値50へ再較正(2026-03アンカー接続)�
 HB/AIAEの定義不連続を含む。点推定ではなく方向性として読むこと。</div>"""
 
 
-def exp_panel(reg, istats, res):
-    if not reg and not istats:
-        return ""
+def exp_panel(reg, istats, res, v1):
     cards = ""
-    if istats and res:
-        cur_bk = "21+" if res["density"] >= 21 else (
-            "6-20" if res["density"] >= 6 else ("1-5" if res["density"] >= 1 else "0"))
-        s21 = istats.get("21+")
-        if s21:
-            lit = "🔔 点灯中" if cur_bk == "21+" else "未点灯(参考値)"
-            cards += f"""
-    <div class="card"><div class="lbl">③パニック(密度21+)点灯時 — {lit}</div>
-      <div class="big">{_fmt_pct(s21['m12'])}<span class="unit"> /12M</span></div>
-      <div class="small">勝率{s21['w12']*100:.0f}% / 6M {_fmt_pct(s21['m6'])} (勝率{s21['w6']*100:.0f}%)
-      / n={s21['n']}日<br>全履歴(2006-)から毎日再計算。独立イベントは実質3-4回</div></div>"""
-        sc = istats.get(cur_bk)
-        if sc and cur_bk != "21+":
-            cards += f"""
-    <div class="card"><div class="lbl">現在の密度バケット ({cur_bk}) の歴史統計</div>
-      <div class="big">{_fmt_pct(sc['m12'])}<span class="unit"> /12M</span></div>
-      <div class="small">勝率{sc['w12']*100:.0f}% / 6M {_fmt_pct(sc['m6'])} / n={sc['n']}日
-      (毎日再計算)</div></div>"""
-    if reg:
+    # ① 底側モデル (インサイダー密度) — ③パニック点灯時のみ期待値を表示
+    lit_b = res is not None and res["density"] >= 21
+    s21 = (istats or {}).get("21+")
+    if lit_b and s21:
         cards += f"""
-    <div class="card"><div class="lbl">AIAE 10年回帰 (現在値 {reg['cur']*100:.1f}%)</div>
-      <div class="big">{_fmt_pct(reg['pred'])}<span class="unit"> /年×10Y</span></div>
-      <div class="small">R²={reg['r2']:.2f} / n={reg['n']}四半期 (Z.1全史×S&amp;P500価格、毎日再計算)<br>
-      配当除く価格リターン。サンプル重複あり・in-sample値</div></div>"""
+    <div class="card state" style="background:linear-gradient(135deg,#1f9d68,#0d5436)">
+      <div class="lbl">① 底側モデル — 🔔 点灯中 (密度{res['density']})</div>
+      <div class="big">{_fmt_pct(s21['m12'])}<span class="unit"> /12M期待</span></div>
+      <div class="small">勝率{s21['w12']*100:.0f}% / 6M {_fmt_pct(s21['m6'])} (勝率{s21['w6']*100:.0f}%)
+      / n={s21['n']}日 — 全履歴から毎日再計算。独立イベントは実質3-4回</div></div>"""
+    else:
+        ref = (f"参考: 点灯時の歴史期待 12M {_fmt_pct(s21['m12'])} 勝率{s21['w12']*100:.0f}%"
+               f" (n={s21['n']}日)") if s21 else ""
+        dens = res["density"] if res else "—"
+        cards += f"""
+    <div class="card" style="opacity:.8">
+      <div class="lbl">① 底側モデル (インサイダー密度)</div>
+      <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
+      <div class="small">現在密度 {dens}/63日 — 点灯条件: 密度21+ (③パニック)<br>{ref}</div></div>"""
+    # ② V1天井モデル — スコア35+ で点灯
+    lit_t = v1 is not None and v1["total"] >= 35
+    if lit_t:
+        bk = v1_bucket_row(v1["total"])
+        cards += f"""
+    <div class="card state" style="background:linear-gradient(135deg,#e25656,#5e1414)">
+      <div class="lbl">② V1天井モデル — 🚨 点灯中 (スコア{v1['total']:.1f})</div>
+      <div class="big">{bk['cagr']}<span class="unit"> /1Y期待</span></div>
+      <div class="small">勝率{bk['win']} / n={bk['n']} — {bk['name']}<br>
+      2026-05バックテスト固定値 (実効2イベント、点推定でなく方向性)</div></div>"""
+    else:
+        sc = f"{v1['total']:.1f}" if v1 else "—"
+        cards += f"""
+    <div class="card" style="opacity:.8">
+      <div class="lbl">② V1天井モデル</div>
+      <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
+      <div class="small">現在スコア {sc} — 点灯条件: 35+ (真の天井域)</div></div>"""
+    # ③ AIAE単品 — 常時表示 (10年累積リターン)
+    if reg:
+        cum = (1 + reg["pred"]) ** 10 - 1
+        cards += f"""
+    <div class="card"><div class="lbl">③ AIAE 10年回帰 (現在値 {reg['cur']*100:.1f}%)</div>
+      <div class="big">{_fmt_pct(cum)}<span class="unit"> /10年累積</span></div>
+      <div class="small">年率換算 {_fmt_pct(reg['pred'])}/年 / R²={reg['r2']:.2f} / n={reg['n']}四半期<br>
+      Z.1全史×S&amp;P500価格・毎日再計算。配当除く・in-sample</div></div>"""
+    if not cards:
+        return ""
     return f"""
-<h2 class="sec exp">期待値モニター</h2>
+<h2 class="sec">期待値モニター</h2>
 <div class="grid">{cards}</div>
-<div class="fineprint">※ 先行リターンは重複標本のため統計的独立性なし。AIAEのR²はin-sample。
-V1点灯時期待のみバックテスト固定値(過去のMD/M2・HB月次系列が必要なため再計算非対応と明記)。</div>"""
+<div class="fineprint">※ ①②は点灯時のみ期待値を表示(未点灯時の大きな数字は誤解を招くため)。
+①②が同時点灯した場合は歴史的に2008年10月型(暴落進行中の底値買い局面)であり、①の分割買いルールを優先しつつ②の継続下落リスクを併記する。
+先行リターンは重複標本のため統計的独立性なし。</div>"""
 
 
 def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=None):
@@ -1052,7 +1073,7 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
 {cards}
 {top_panel(v1, hbc, holv)}
-{exp_panel(reg, istats, res)}
+{exp_panel(reg, istats, res, v1)}
 {warn_html}
 <img class="chart" src="chart_insider.png" alt="insider">
 <img class="chart" src="chart_spx.png" alt="spx">
@@ -1087,6 +1108,23 @@ def main():
     spxl = update_spx_long()
     reg = aiae_regression(aiae, spxl)
     istats = insider_bucket_stats(res.get("df") if res else None, spxl)
+    # スコア履歴ロギング (V1/密度/AIAEの自前時系列を蓄積)
+    try:
+        hist_f = os.path.join(ROOT, "data", "score_history.csv")
+        h = (pd.read_csv(hist_f, parse_dates=["date"])
+             if os.path.exists(hist_f) else
+             pd.DataFrame(columns=["date", "v1", "density", "aiae_rt", "hb6m", "mdm2"]))
+        row = {"date": pd.Timestamp(dt.date.today()),
+               "v1": round(v1["total"], 2) if v1 else None,
+               "density": res["density"] if res else None,
+               "aiae_rt": round(aiae.get("rt_val", float("nan")) * 100, 2) if aiae else None,
+               "hb6m": hbc["6m"] if hbc else None,
+               "mdm2": round(mdm2["val"]) if mdm2 else None}
+        h = pd.concat([h, pd.DataFrame([row])], ignore_index=True)
+        h = h.drop_duplicates("date", keep="last").sort_values("date")
+        h.to_csv(hist_f, index=False)
+    except Exception as e:
+        log(f"スコア履歴ロギング失敗: {e}")
     if res:
         make_charts(res, aiae)
     build_html(res, aiae, v1, hbc, holv, reg, istats)
