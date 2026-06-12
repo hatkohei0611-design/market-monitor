@@ -332,11 +332,15 @@ def update_aiae(spx):
         cols, detail = {}, []
         for sid in AIAE_EQ + AIAE_DEBT:
             s = fred_series(sid)
+            # 単位正規化: FRED APIは百万$、fredgraphは表示単位(十億$等)で返す
+            # 最新値が1e6超なら百万$単位とみなし十億$へ換算
+            if abs(s.iloc[-1]) > 1e6:
+                s = s / 1000.0
             cols[sid] = s
-            detail.append(f"{sid}=〜{s.index[-1].date()}:{s.iloc[-1]:,.0f}")
-        log("AIAE系列診断: " + " | ".join(detail))
+            detail.append(f"{sid}=〜{s.index[-1].date()}:{s.iloc[-1]:,.0f}B")
+        log("AIAE系列診断(十億$換算後): " + " | ".join(detail))
         z1 = pd.concat(cols.values(), axis=1).dropna()
-        eq = z1[AIAE_EQ].sum(axis=1) / 1000.0       # millions -> billions
+        eq = z1[AIAE_EQ].sum(axis=1)    # 全て十億$に正規化済み
         debt = z1[AIAE_DEBT].sum(axis=1)
         aiae = (eq / (eq + debt)).rename("aiae")
         last = float(aiae.iloc[-1])
@@ -600,7 +604,9 @@ def compute_v1(mdm2, aiae, hbc):
     aiae_pct = aiae.get("rt_val", aiae["q_val"]) * 100
     s_md = max(0.0, (mdm2["val"] - 4000) / 50)
     s_hb = float(hbc["6m"])
-    s_ai = max(0.0, aiae_pct - 40)
+    # FRED公式AIAEは旧較正(TradingView系)と約10pt水準が異なるため閾値50に再較正
+    # (アンカー: 2026-03のAIAEスコア2.93を再現するよう接続)
+    s_ai = max(0.0, aiae_pct - 50)
     total = s_md + s_hb + s_ai
     if total >= 50:
         bucket, color = "50+ 史上級バブル (2000型)", "#8b0000"
@@ -765,7 +771,9 @@ def top_panel(v1, hbc, holv):
   <div class="grid">{cards}</div>
   <div class="warn" style="background:#eef2f8;border-color:#aabbd4">
   <b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)に依拠。HB過去分は目視集約シード(定義混成)、
-  2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)で接続点に定義不連続あり。点推定ではなく方向性として読むこと。</div>"""
+  2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)。AIAE項はFRED公式系列(Z.1)用に閾値50へ再較正
+  (旧較正のTradingView系列とは別物のため、2026-03アンカーで接続)。HB/AIAEとも接続点に定義不連続あり。
+  点推定ではなく方向性として読むこと。</div>"""
 
 
 def build_html(res, aiae=None, v1=None, hbc=None, holv=None):
