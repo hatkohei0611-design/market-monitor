@@ -1111,6 +1111,73 @@ def make_v1_chart(aiae):
         return False
 
 
+def make_v1_long_chart(aiae):
+    """長期チャート: S&P500 × V1コア(HB除く) × MD/M2 (1997-)
+    MD/M2履歴が2年以上ある場合のみ描画"""
+    try:
+        if not (os.path.exists(MDM2_CSV) and os.path.exists(SPXLONG_CSV) and aiae):
+            return False
+        mm = pd.read_csv(MDM2_CSV, parse_dates=["date"]).set_index("date")["mdm2_v1"]
+        if (mm.index[-1] - mm.index[0]).days < 730:
+            return False
+        q = aiae["q"]["aiae"]
+        core, full = [], []
+        hb = pd.read_csv(HB_CSV, parse_dates=["date"]) if os.path.exists(HB_CSV) else None
+        for d, mv in mm.items():
+            av = q[q.index <= d]
+            if not len(av):
+                continue
+            c = max(0, (mv - 4000) / 50) + max(0, float(av.iloc[-1]) * 100 - 50)
+            core.append((d, c))
+            if hb is not None and d >= pd.Timestamp("2025-12-01"):
+                h6 = hb[(hb["date"] > d - pd.Timedelta(days=182)) &
+                        (hb["date"] <= d)]["signals"].sum()
+                full.append((d, c + h6))
+        cdf = pd.DataFrame(core, columns=["date", "v1"]).set_index("date")
+        fdf = pd.DataFrame(full, columns=["date", "v1"]).set_index("date") if full else None
+        spxl = pd.read_csv(SPXLONG_CSV, parse_dates=["date"])
+        sp = spxl[spxl["date"] >= cdf.index[0]].set_index("date")["close"]
+        fig, (a1, a2) = plt.subplots(2, 1, figsize=(11.5, 7.6), sharex=True,
+                                     gridspec_kw={"height_ratios": [3, 2]})
+        a1.semilogy(sp.index, sp.values, color="#16243f", lw=1.3, label="S&P 500 (左軸, log)")
+        a1.set_ylabel("S&P 500")
+        a1.set_title("S&P 500 × V1コアスコア × MD/M2 (1997〜)")
+        b1 = a1.twinx()
+        b1.fill_between(cdf.index, cdf["v1"], color="#cd3a3a", alpha=.30,
+                        label="V1コア (MD/M2+AIAE, HB除く)")
+        if fdf is not None and len(fdf):
+            b1.plot(fdf.index, fdf["v1"], color="#8b0000", lw=2.2,
+                    label="フルV1 (HB込み, 2025-12〜)")
+        b1.axhline(35, color="#cd3a3a", lw=1, ls="--", alpha=.7)
+        b1.set_ylabel("V1スコア (右軸)")
+        b1.set_ylim(0, max(60, cdf["v1"].max() + 8))
+        ln1, lb1 = a1.get_legend_handles_labels()
+        ln2, lb2 = b1.get_legend_handles_labels()
+        a1.legend(ln1 + ln2, lb1 + lb2, fontsize=8, loc="upper left")
+        a2.plot(mm.index, mm.values, color="#1e8a5a", lw=1.5)
+        a2.axhline(4000, color="#cc8833", lw=1, ls="--", alpha=.7)
+        a2.axhline(5000, color="#cd3a3a", lw=1, ls="--", alpha=.7)
+        a2.set_ylabel("MD/M2")
+        a2.grid(alpha=.25)
+        for d, lab in [("2000-03-01", "2000"), ("2007-07-01", "2007"),
+                       ("2021-10-01", "2021"), ("2026-04-01", "2026")]:
+            t = pd.Timestamp(d)
+            if t in mm.index:
+                a2.annotate(lab, xy=(t, mm[t]), xytext=(0, 8),
+                            textcoords="offset points", ha="center",
+                            fontsize=8, color="#8b0000", fontweight="bold")
+        a2.annotate("注: HB系列は2025-12以降のみ存在。長期線はHBを除くコアスコア",
+                    xy=(0.01, 0.04), xycoords="axes fraction", fontsize=8, color="#666")
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        fig.savefig(os.path.join(DOCS, "chart_v1_long.png"), dpi=110)
+        plt.close(fig)
+        return True
+    except Exception as e:
+        log(f"長期チャート作成失敗: {e}")
+        return False
+
+
 def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=None):
     now_utc = dt.datetime.utcnow()
     now_jst = now_utc + dt.timedelta(hours=9)
@@ -1166,6 +1233,7 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 <img class="chart" src="chart_spx.png" alt="spx">
 <img class="chart" src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
 <img class="chart" src="chart_v1.png" alt="v1" onerror="this.style.display='none'">
+<img class="chart" src="chart_v1_long.png" alt="v1long" onerror="this.style.display='none'">
 </main>
 <footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy/sell filings (NONDERIV P/S・filing単位・提出日)。
 クラスター密度 = 過去63営業日の比率&gt;1.0日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
@@ -1216,6 +1284,7 @@ def main():
     if res:
         make_charts(res, aiae)
     make_v1_chart(aiae)
+    make_v1_long_chart(aiae)
     build_html(res, aiae, v1, hbc, holv, reg, istats)
     log("dashboard generated")
     for w in warnings:
