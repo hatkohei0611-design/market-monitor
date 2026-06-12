@@ -554,8 +554,13 @@ def ho_level(c):
     return 0, "通常", "#2a7d4f"
 
 
+MDRAW_CSV = os.path.join(ROOT, "data", "md_raw.csv")
+
+
 def update_mdm2():
-    """FINRAマージンデット(月次) + FRED M2 -> V1スケールのMD/M2"""
+    """FINRAマージンデット(月次) + FRED M2 -> V1スケールのMD/M2
+    優先順: ①FINRA自動取得 ②md_raw.csv(手動の生Debit値) ③mdm2.csvキャッシュ"""
+    md = None
     try:
         r = fetch("https://www.finra.org/investors/learn-to-invest/"
                   "advanced-investing/margin-statistics",
@@ -579,18 +584,30 @@ def update_mdm2():
         md = md.drop_duplicates("date").sort_values("date")
         if md["md_mil"].iloc[-1] < 5e5:  # 50万(=0.5T)未満は誤抽出疑い
             raise ValueError(f"MD抽出値が異常 ({md['md_mil'].iloc[-1]:,.0f}M)")
-        m2 = fred_series("M2SL")  # billions, 月次
-        mm = md.set_index("date")["md_mil"].div(1000)  # -> billions
-        ratio = (mm / m2).dropna()
-        scaled = ratio * 100000  # V1スケール (5382 = 5.382%相当)
+    except Exception as e:
+        if os.path.exists(MDRAW_CSV):
+            md = pd.read_csv(MDRAW_CSV, parse_dates=["date"]).rename(
+                columns={"debit_mil": "md_mil"}).sort_values("date")
+            log(f"FINRA自動取得失敗 -> md_raw.csv使用 "
+                f"(最新 {md['date'].iloc[-1].date()}: {md['md_mil'].iloc[-1]:,.0f}M)")
+        else:
+            warnings.append(f"FINRA MD/M2取得失敗 ({e}) — キャッシュ使用 "
+                            f"(data/md_raw.csv に月1回、生のDebit値を追記してください)")
+    try:
+        if md is None:
+            raise ValueError("MDデータなし")
+        m2 = fred_series("M2SL")  # 月次
+        if abs(m2.iloc[-1]) > 1e6:  # API=百万$なら十億$へ正規化
+            m2 = m2 / 1000.0
+        m2m = m2.reindex(md.set_index("date").index, method="ffill")
+        scaled = (md.set_index("date")["md_mil"] / m2m * 100).dropna()  # V1スケール
         out = pd.DataFrame({"mdm2_v1": scaled})
         out.index.name = "date"
         out.to_csv(MDM2_CSV)
         log(f"MD/M2: 最新 {out.index[-1].date()} = {scaled.iloc[-1]:.0f} (V1スケール)")
         return {"date": out.index[-1].date(), "val": float(scaled.iloc[-1])}
     except Exception as e:
-        warnings.append(f"FINRA MD/M2取得失敗 ({e}) — キャッシュ使用 "
-                        f"(継続する場合は data/mdm2.csv に月1回手動追記)")
+        warnings.append(f"MD/M2計算失敗 ({e}) — 前回キャッシュを使用")
         if os.path.exists(MDM2_CSV):
             c = pd.read_csv(MDM2_CSV, parse_dates=["date"], index_col="date")
             return {"date": c.index[-1].date(), "val": float(c["mdm2_v1"].iloc[-1])}
@@ -1013,11 +1030,19 @@ def exp_panel(reg, istats, res, v1):
     # ③ AIAE単品 — 常時表示 (10年累積リターン)
     if reg:
         cum = (1 + reg["pred"]) ** 10 - 1
+        if cum >= 0.20:
+            mood, mcol, mbg = "🟢 強気", "#7ce3ae", "rgba(47,174,116,.13)"
+        elif cum <= -0.10:
+            mood, mcol, mbg = "🔴 弱気", "#f09a9a", "rgba(226,86,86,.13)"
+        else:
+            mood, mcol, mbg = "⚪ 中立", "var(--ink)", "rgba(255,255,255,.04)"
         cards += f"""
-    <div class="card"><div class="lbl">③ AIAE 10年回帰 (現在値 {reg['cur']*100:.1f}%)</div>
-      <div class="big">{_fmt_pct(cum)}<span class="unit"> /10年累積</span></div>
+    <div class="card" style="background:{mbg};border-color:{mcol}33">
+      <div class="lbl">③ AIAE 10年回帰 (現在値 {reg['cur']*100:.1f}%) — {mood}</div>
+      <div class="big" style="color:{mcol}">{_fmt_pct(cum)}<span class="unit"> /10年累積</span></div>
       <div class="small">年率換算 {_fmt_pct(reg['pred'])}/年 / R²={reg['r2']:.2f} / n={reg['n']}四半期<br>
-      Z.1全史×S&amp;P500価格・毎日再計算。配当除く・in-sample</div></div>"""
+      Z.1全史×S&amp;P500価格・毎日再計算。配当除く・in-sample<br>
+      判定: 累積+20%以上=強気 / -10%以下=弱気 / 中間=中立</div></div>"""
     if not cards:
         return ""
     return f"""
