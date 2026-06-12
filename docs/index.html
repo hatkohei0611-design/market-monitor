@@ -18,7 +18,7 @@
  footer{font-size:10.5px;color:#777;padding:14px;line-height:1.6}
 </style></head><body>
 <header><h1>Market Monitor — インサイダー密度ステート</h1>
-<div class="sub">最終更新: 2026-06-12 14:59 JST (05:59 UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
+<div class="sub">最終更新: 2026-06-12 16:11 JST (07:11 UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
 <main>
 <h2 style="font-size:14px;margin:4px 0 8px;color:#1a3a6b">📉 底側 — インサイダー密度ステート</h2>
 
@@ -31,9 +31,9 @@
     <div class="card"><div class="lbl">クラスター密度</div>
       <div class="big">0 <span class="unit">/63日</span></div>
       <div class="small">閾値: 警戒6 / パニック21</div></div>
-    <div class="card"><div class="lbl">本日の比率 (2026-05-14)</div>
-      <div class="big">0.478</div>
-      <div class="small">buy 152 / sell 318</div></div>
+    <div class="card"><div class="lbl">本日の比率 (2026-05-26)</div>
+      <div class="big">0.259</div>
+      <div class="small">buy 110 / sell 425</div></div>
     <div class="card"><div class="lbl">S&amp;P 500 DD (2026-06-11)</div>
       <div class="big">-2.8%</div>
       <div class="small">終値 7,394 / 252日高値比</div></div>
@@ -44,12 +44,12 @@
   <div class="grid">
     <div class="card"><div class="lbl">HOクラスター判定</div>
       <div class="big" style="color:#2a7d4f">Lv0 通常</div>
-      <div class="small">3M:0 / 6M:6 / 12M:11<br>
+      <div class="small">3M:1 / 6M:7 / 12M:12<br>
       閾値(合算): Watch 6M≧8 / Warning 3M≧10 / Alarm 3M≧16</div></div></div>
   <div class="warn" style="background:#eef2f8;border-color:#aabbd4">
   <b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)に依拠。HB過去分は目視集約シード(定義混成)、
   2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)で接続点に定義不連続あり。点推定ではなく方向性として読むこと。</div>
-<div class="warn"><b>⚠ データ注意事項</b><ul><li>キャッチアップ中: 残り約27日分 (Actionsを再実行すると進みます)</li><li>インサイダーデータがS&P 500より28日遅れています(EDGARキャッチアップ中は正常)</li><li>AIAE取得失敗 (HTTPSConnectionPool(host='fred.stlouisfed.org', port=443): Read timed out. (read timeout=60)) — 前回キャッシュを使用</li><li>WSJブレッドス取得失敗 (WSJ応答の構造が想定外 (ログの[診断]行参照)) — 本日のHO判定スキップ</li><li>FINRA MD/M2取得失敗 (403 Client Error: Forbidden for url: https://www.finra.org/investors/learn-to-invest/advanced-investing/margin-statistics) — キャッシュ使用 (継続する場合は data/mdm2.csv に月1回手動追記)</li></ul></div>
+<div class="warn"><b>⚠ データ注意事項</b><ul><li>キャッチアップ中: 残り約15日分 (Actionsを再実行すると進みます)</li><li>インサイダーデータがS&P 500より16日遅れています(EDGARキャッチアップ中は正常)</li><li>AIAE取得失敗 (HTTPSConnectionPool(host='fred.stlouisfed.org', port=443): Read timed out. (read timeout=60)) — 前回キャッシュを使用</li><li>McClellan蓄積中 (1/39日) — HO判定は3条件版(暫定)</li><li>FINRA MD/M2取得失敗 (403 Client Error: Forbidden for url: https://www.finra.org/investors/learn-to-invest/advanced-investing/margin-statistics) — キャッシュ使用 (継続する場合は data/mdm2.csv に月1回手動追記)</li></ul></div>
 <img src="chart_insider.png" alt="insider">
 <img src="chart_spx.png" alt="spx">
 <img src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
