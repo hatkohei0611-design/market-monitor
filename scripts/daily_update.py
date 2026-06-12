@@ -635,18 +635,28 @@ def update_spx_long():
         c = pd.read_csv(SPXLONG_CSV, parse_dates=["date"])
         if c["date"].max() > pd.Timestamp.now() - pd.Timedelta(days=7):
             return c
-    try:
-        r = fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
-                  "?range=max&interval=1d", headers=BROWSER_HEADERS, timeout=60)
+    def _grab(url, min_rows):
+        r = fetch(url, headers=BROWSER_HEADERS, timeout=60)
         j = r.json()["chart"]["result"][0]
         df = pd.DataFrame({"date": pd.to_datetime(j["timestamp"], unit="s").normalize(),
                            "close": j["indicators"]["quote"][0]["close"]}).dropna()
         df = df.drop_duplicates("date").sort_values("date")
-        if len(df) > 5000:
-            df.to_csv(SPXLONG_CSV, index=False)
-            log(f"SPX長期: {len(df)}日 ({df['date'].min().date()}〜)")
-            return df
-        raise ValueError(f"長期SPXが短すぎます ({len(df)}行)")
+        if len(df) < min_rows:
+            raise ValueError(f"行数不足 ({len(df)})")
+        return df
+    try:
+        p2 = int(dt.datetime.now().timestamp())
+        try:  # 日次フル履歴 (1927年からのエポック秒を明示)
+            df = _grab("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
+                       f"?period1=-2208988800&period2={p2}&interval=1d", 5000)
+            log(f"SPX長期(日次): {len(df)}行 ({df['date'].min().date()}〜)")
+        except Exception as e1:  # 月次フォールバック
+            log(f"日次フル履歴失敗 ({e1}) -> 月次にフォールバック")
+            df = _grab("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
+                       "?range=max&interval=1mo", 600)
+            log(f"SPX長期(月次): {len(df)}行 ({df['date'].min().date()}〜)")
+        df.to_csv(SPXLONG_CSV, index=False)
+        return df
     except Exception as e:
         warnings.append(f"SPX長期履歴の取得失敗 ({e}) — 期待値モニター一部停止")
         if os.path.exists(SPXLONG_CSV):
@@ -691,16 +701,23 @@ def insider_bucket_stats(df, spxl):
     try:
         d = df.sort_values("date").copy()
         s = spxl.sort_values("date").reset_index(drop=True)
+        d["date"] = pd.to_datetime(d["date"]).astype("datetime64[ns]")
+        s["date"] = pd.to_datetime(s["date"]).astype("datetime64[ns]")
+        gap = s["date"].diff().dt.days.median()
+        h6, h12 = (6, 12) if gap > 15 else (126, 252)  # 月次/日次を自動判定
         d = pd.merge_asof(d, s.rename(columns={"close": "px"}), on="date")
         d["idx"] = d["date"].map(
             {dt_: i for i, dt_ in enumerate(s["date"])})
+        if gap > 15:  # 月次: 各日付を直近行へ割当
+            d["idx"] = d["date"].map(
+                lambda t: s["date"].searchsorted(t, side="right") - 1)
         d = d.dropna(subset=["idx", "px"])
         px = s["close"].values
         def fwd(i, h):
             i = int(i)
-            return px[i + h] / px[i] - 1 if i + h < len(px) else None
-        d["f6"] = d["idx"].map(lambda i: fwd(i, 126))
-        d["f12"] = d["idx"].map(lambda i: fwd(i, 252))
+            return px[i + h] / px[i] - 1 if 0 <= i and i + h < len(px) else None
+        d["f6"] = d["idx"].map(lambda i: fwd(i, h6))
+        d["f12"] = d["idx"].map(lambda i: fwd(i, h12))
         def bucket(v):
             return "21+" if v >= 21 else ("6-20" if v >= 6 else
                                           ("1-5" if v >= 1 else "0"))
@@ -843,45 +860,60 @@ def make_charts(res, aiae=None):
 
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800&family=Noto+Sans+JP:wght@400;500;700;900&display=swap');
-:root{--navy:#16243f;--blue:#2b5aa0;--ink:#1c2433;--mut:#69748a;--bg:#eef1f7;
---ok:#1e8a5a;--warn:#d07f2e;--bad:#cd3a3a;--card:#ffffff}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800&family=Noto+Sans+JP:wght@400;500;700;900&family=Cormorant+Garamond:wght@600&display=swap');
+:root{--gold:#d4af6a;--gold2:#f0d9a8;--ink:#e9edf6;--mut:#93a0b8;--ok:#2fae74;
+--warn:#e0954a;--bad:#e25656;--line:rgba(255,255,255,.09)}
 *{box-sizing:border-box}
-body{font-family:'Noto Sans JP','Inter',sans-serif;margin:0;background:var(--bg);color:var(--ink)}
-header{background:linear-gradient(120deg,#101c33,#1b3158 55%,#27548f);color:#fff;padding:26px 22px 22px}
-header h1{font-size:21px;margin:0;font-weight:900;letter-spacing:.02em}
-header .sub{font-size:11.5px;opacity:.75;margin-top:6px;font-weight:500}
-main{max-width:980px;margin:0 auto;padding:18px 16px 30px}
-h2.sec{font-size:13.5px;margin:22px 0 10px;color:var(--navy);font-weight:900;
-display:flex;align-items:center;gap:8px}
-h2.sec::before{content:"";width:10px;height:10px;border-radius:3px;background:var(--blue)}
-h2.sec.top::before{background:var(--bad)}
-h2.sec.exp::before{background:#7a4fd0}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px}
-.card{background:var(--card);border-radius:14px;padding:15px 16px;
-box-shadow:0 2px 10px rgba(22,36,63,.07);border:1px solid rgba(22,36,63,.05)}
-.card.state{color:#fff;border:none}
-.lbl{font-size:10.5px;color:var(--mut);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
-.card.state .lbl{color:rgba(255,255,255,.75)}
-.big{font-size:30px;font-weight:800;font-family:'Inter','Noto Sans JP',sans-serif;
-margin:5px 0 3px;line-height:1.1}
-.unit{font-size:13px;font-weight:500;color:var(--mut)}
-.small{font-size:11px;color:var(--mut);line-height:1.65}
-.card.state .small{color:rgba(255,255,255,.85)}
-.bar{height:8px;border-radius:99px;background:#e7ebf3;margin:9px 0 4px;position:relative}
+body{font-family:'Noto Sans JP','Inter',sans-serif;margin:0;color:var(--ink);
+background:#0c1120;background-image:
+radial-gradient(900px 480px at 85% -10%, rgba(63,94,168,.28), transparent 60%),
+radial-gradient(700px 420px at -10% 25%, rgba(122,79,208,.16), transparent 55%),
+radial-gradient(800px 500px at 50% 110%, rgba(212,175,106,.07), transparent 60%)}
+header{padding:34px 24px 26px;border-bottom:1px solid var(--line);
+background:linear-gradient(120deg, rgba(16,24,46,.9), rgba(24,38,72,.55));
+backdrop-filter:blur(6px)}
+header .wrap{max-width:1020px;margin:0 auto}
+header h1{font-size:24px;margin:0;font-weight:900;letter-spacing:.04em;
+background:linear-gradient(90deg,#fff,var(--gold2) 65%,var(--gold));
+-webkit-background-clip:text;background-clip:text;color:transparent}
+header .sub{font-size:11.5px;color:var(--mut);margin-top:8px;font-weight:500;letter-spacing:.03em}
+header .rule{width:64px;height:2px;background:linear-gradient(90deg,var(--gold),transparent);
+margin-top:14px;border-radius:2px}
+main{max-width:1020px;margin:0 auto;padding:22px 18px 36px}
+h2.sec{font-size:13px;margin:26px 0 12px;font-weight:900;letter-spacing:.1em;
+color:var(--gold2);display:flex;align-items:center;gap:10px;text-transform:none}
+h2.sec::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:13px}
+.card{background:linear-gradient(160deg, rgba(255,255,255,.055), rgba(255,255,255,.02));
+border:1px solid var(--line);border-radius:16px;padding:16px 17px;
+box-shadow:0 10px 30px rgba(3,7,18,.45);backdrop-filter:blur(5px);
+transition:transform .15s ease}
+.card:hover{transform:translateY(-2px)}
+.card.state{border:none;color:#fff}
+.lbl{font-size:10px;color:var(--mut);font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.card.state .lbl{color:rgba(255,255,255,.8)}
+.big{font-size:32px;font-weight:800;font-family:'Inter','Noto Sans JP',sans-serif;
+margin:6px 0 4px;line-height:1.05;text-shadow:0 2px 14px rgba(0,0,0,.35)}
+.unit{font-size:13px;font-weight:600;color:var(--mut)}
+.card.state .unit{color:rgba(255,255,255,.75)}
+.small{font-size:11px;color:var(--mut);line-height:1.7}
+.card.state .small{color:rgba(255,255,255,.88)}
+.bar{height:8px;border-radius:99px;background:rgba(0,0,0,.35);margin:10px 0 5px;position:relative;overflow:visible}
 .bar>i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;
-background:linear-gradient(90deg,#1e8a5a,#d0b32e 45%,#cd3a3a 70%)}
-.bar>b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#16243f;left:58.3%}
-.note{background:#eef2fa;border:1px solid #c5d2ea;border-radius:12px;
-padding:11px 15px;font-size:11.5px;line-height:1.8;margin:13px 0;color:#2c3a55}
-.warnbox{background:#fff7e8;border:1px solid #e6c386;border-radius:12px;
-padding:11px 15px;font-size:11.5px;margin:13px 0;color:#5d4310}
-.warnbox ul{margin:5px 0 0 17px;padding:0}
-.warnbox li{margin:3px 0}
-img.chart{width:100%;border-radius:14px;background:#fff;
-box-shadow:0 2px 10px rgba(22,36,63,.07);margin:12px 0 2px}
-.fineprint{font-size:10px;color:#8a93a6;line-height:1.7;margin-top:4px}
-footer{font-size:10px;color:#8a93a6;padding:18px 22px 26px;line-height:1.8;max-width:980px;margin:0 auto}
+background:linear-gradient(90deg,#2fae74,#e6c34a 45%,#e25656 70%);
+box-shadow:0 0 12px rgba(230,195,74,.35)}
+.bar>b{position:absolute;top:-3px;bottom:-3px;width:2px;background:#fff;opacity:.85;left:58.3%}
+.note{background:rgba(63,94,168,.13);border:1px solid rgba(120,150,210,.25);border-radius:14px;
+padding:12px 16px;font-size:11.5px;line-height:1.85;margin:15px 0;color:#c6d2e8}
+.warnbox{background:rgba(212,160,70,.1);border:1px solid rgba(212,175,106,.3);border-radius:14px;
+padding:12px 16px;font-size:11.5px;margin:15px 0;color:#e8d3a8}
+.warnbox ul{margin:6px 0 0 17px;padding:0}
+.warnbox li{margin:4px 0}
+img.chart{width:100%;border-radius:16px;background:#fff;padding:6px;
+border:1px solid var(--line);box-shadow:0 10px 30px rgba(3,7,18,.45);margin:14px 0 2px}
+.fineprint{font-size:10px;color:#71809c;line-height:1.8;margin-top:6px}
+footer{font-size:10px;color:#71809c;padding:22px 24px 30px;line-height:1.9;
+max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
 """
 
 
@@ -915,7 +947,7 @@ def top_panel(v1, hbc, holv):
         bkrow = (f"点灯時1Y期待 <b>{bk['cagr']}</b> / 勝率{bk['win']} (n={bk['n']},"
                  f" 2026-05レポート固定値)") if bk else ""
         cards += f"""
-    <div class="card state" style="background:linear-gradient(135deg,{v1['color']},#7d1f1f)">
+    <div class="card state" style="background:linear-gradient(135deg,{v1['color']},#5e1414);box-shadow:0 10px 35px rgba(226,86,86,.25)">
       <div class="lbl">V1 天井スコア</div>
       <div class="big">{v1['total']:.1f}</div>
       <div class="bar" style="background:rgba(255,255,255,.25)"><i style="width:{pos}%"></i><b></b></div>
@@ -981,9 +1013,9 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
     if res:
         name, color, advice = res["state"]
         ratio_s = f"{res['ratio']:.3f}" if res["ratio"] is not None else "—"
-        grad = {"#2a7d4f": "linear-gradient(135deg,#1e8a5a,#136443)",
-                "#cc8833": "linear-gradient(135deg,#d07f2e,#a05a14)",
-                "#cc3333": "linear-gradient(135deg,#cd3a3a,#8b1f1f)"}.get(color, color)
+        grad = {"#2a7d4f": "linear-gradient(135deg,#1f9d68,#0d5436)",
+                "#cc8833": "linear-gradient(135deg,#e0954a,#8a4d10)",
+                "#cc3333": "linear-gradient(135deg,#e25656,#7c1a1a)"}.get(color, color)
         cards = f"""
   <div class="grid">
     <div class="card state" style="background:{grad}">
@@ -1013,9 +1045,9 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Market Monitor</title>
 <style>{CSS}</style></head><body>
-<header><h1>Market Monitor</h1>
-<div class="sub">底値検出 × 天井警戒 の両面監視 / 最終更新 {now_jst:%Y-%m-%d %H:%M} JST
- / SEC EDGAR · WSJ · FRED · Yahoo</div></header>
+<header><div class="wrap"><h1>MARKET MONITOR</h1>
+<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 {now_jst:%Y-%m-%d %H:%M} JST
+ / SEC EDGAR · WSJ · FRED · Yahoo</div><div class="rule"></div></div></header>
 <main>
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
 {cards}
