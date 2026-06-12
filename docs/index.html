@@ -59,7 +59,7 @@ footer{font-size:10px;color:#71809c;padding:22px 24px 30px;line-height:1.9;
 max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
 </style></head><body>
 <header><div class="wrap"><h1>MARKET MONITOR</h1>
-<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-12 18:12 JST
+<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-12 18:38 JST
  / SEC EDGAR · WSJ · FRED · Yahoo</div><div class="rule"></div></div></header>
 <main>
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
@@ -102,22 +102,24 @@ HB過去分は目視集約シード、2026-06-12以降は自前ルール(2.8%・
 AIAE項はFRED公式系列用に閾値50へ再較正(2026-03アンカー接続)。点灯時期待値は固定のバックテスト値であり、
 HB/AIAEの定義不連続を含む。点推定ではなく方向性として読むこと。</div>
 
-<h2 class="sec exp">期待値モニター</h2>
+<h2 class="sec">期待値モニター</h2>
 <div class="grid">
-    <div class="card"><div class="lbl">③パニック(密度21+)点灯時 — 未点灯(参考値)</div>
-      <div class="big">+30.2%<span class="unit"> /12M</span></div>
-      <div class="small">勝率100% / 6M +16.8% (勝率90%)
-      / n=210日<br>全履歴(2006-)から毎日再計算。独立イベントは実質3-4回</div></div>
-    <div class="card"><div class="lbl">現在の密度バケット (0) の歴史統計</div>
-      <div class="big">+9.7%<span class="unit"> /12M</span></div>
-      <div class="small">勝率79% / 6M +5.9% / n=2256日
-      (毎日再計算)</div></div>
-    <div class="card"><div class="lbl">AIAE 10年回帰 (現在値 56.0%)</div>
-      <div class="big">-4.5%<span class="unit"> /年×10Y</span></div>
-      <div class="small">R²=0.66 / n=265四半期 (Z.1全史×S&amp;P500価格、毎日再計算)<br>
-      配当除く価格リターン。サンプル重複あり・in-sample値</div></div></div>
-<div class="fineprint">※ 先行リターンは重複標本のため統計的独立性なし。AIAEのR²はin-sample。
-V1点灯時期待のみバックテスト固定値(過去のMD/M2・HB月次系列が必要なため再計算非対応と明記)。</div>
+    <div class="card" style="opacity:.8">
+      <div class="lbl">① 底側モデル (インサイダー密度)</div>
+      <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
+      <div class="small">現在密度 0/63日 — 点灯条件: 密度21+ (③パニック)<br>参考: 点灯時の歴史期待 12M +30.2% 勝率100% (n=210日)</div></div>
+    <div class="card state" style="background:linear-gradient(135deg,#e25656,#5e1414)">
+      <div class="lbl">② V1天井モデル — 🚨 点灯中 (スコア40.6)</div>
+      <div class="big">-27.1%<span class="unit"> /1Y期待</span></div>
+      <div class="small">勝率0% / n=17 — 35-50 真の天井域<br>
+      2026-05バックテスト固定値 (実効2イベント、点推定でなく方向性)</div></div>
+    <div class="card"><div class="lbl">③ AIAE 10年回帰 (現在値 56.0%)</div>
+      <div class="big">-36.8%<span class="unit"> /10年累積</span></div>
+      <div class="small">年率換算 -4.5%/年 / R²=0.66 / n=265四半期<br>
+      Z.1全史×S&amp;P500価格・毎日再計算。配当除く・in-sample</div></div></div>
+<div class="fineprint">※ ①②は点灯時のみ期待値を表示(未点灯時の大きな数字は誤解を招くため)。
+①②が同時点灯した場合は歴史的に2008年10月型(暴落進行中の底値買い局面)であり、①の分割買いルールを優先しつつ②の継続下落リスクを併記する。
+先行リターンは重複標本のため統計的独立性なし。</div>
 <div class="warnbox"><b>⚠ データ注意事項</b><ul><li>McClellan蓄積中 (1/39日) — HO判定は3条件版(暫定)</li><li>FINRA MD/M2取得失敗 (403 Client Error: Forbidden for url: https://www.finra.org/investors/learn-to-invest/advanced-investing/margin-statistics) — キャッシュ使用 (継続する場合は data/mdm2.csv に月1回手動追記)</li></ul></div>
 <img class="chart" src="chart_insider.png" alt="insider">
 <img class="chart" src="chart_spx.png" alt="spx">
