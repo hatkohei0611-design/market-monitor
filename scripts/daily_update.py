@@ -393,8 +393,29 @@ def update_breadth(spx):
                                 "Accept": "application/json, text/plain, */*",
                                 "Referer": "https://www.wsj.com/market-data"})
         j = r.json()
-        # 柔軟パース: 構造内からNYSE/Nasdaqの診断項目を再帰探索
         found = {}
+        # 実構造パース: data.instrumentSets[].headerFields[0].label = 取引所名
+        #               instruments[].id -> latestClose (直近取引日の値)
+        for s in (j.get("data", {}) or {}).get("instrumentSets", []):
+            hdr = s.get("headerFields") or [{}]
+            label = str(hdr[0].get("label", "")).lower()
+            vals = {}
+            for inst in s.get("instruments", []):
+                try:
+                    vals[str(inst.get("id", "")).lower()] = float(
+                        str(inst.get("latestClose", "")).replace(",", ""))
+                except (TypeError, ValueError):
+                    pass
+            rec = {"adv": vals.get("advances"), "dec": vals.get("declines"),
+                   "nh": vals.get("newhighs"), "nl": vals.get("newlows"),
+                   "issues": vals.get("issuestraded")}
+            if rec["adv"] is None or rec["nh"] is None:
+                continue
+            if "nyse" in label and "amex" not in label and "arca" not in label:
+                found.setdefault("nyse", rec)
+            elif "nasdaq" in label:
+                found.setdefault("nasdaq", rec)
+        # フォールバック: 旧・再帰探索
 
         def walk(node, label=""):
             if isinstance(node, dict):
@@ -433,8 +454,11 @@ def update_breadth(spx):
                 if isinstance(j, dict) else str(j)[:300]
             log(f"[診断] WSJ data中身: {snippet}")
             raise ValueError("WSJ応答の構造が想定外 (ログの[診断]行参照)")
-        today = pd.Timestamp(dt.date.today())
-        row = {"date": today}
+        if spx is not None and len(spx):
+            diary_date = pd.Timestamp(spx["date"].max())
+        else:
+            diary_date = pd.Timestamp(dt.date.today())
+        row = {"date": diary_date}
         for k in ["adv", "dec", "nh", "nl", "issues"]:
             vals = [found[m][k] for m in ("nyse", "nasdaq")
                     if found[m][k] is not None]
