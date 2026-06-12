@@ -81,13 +81,13 @@ def log(msg):
     print(f"[{dt.datetime.utcnow():%H:%M:%S}] {msg}", flush=True)
 
 
-def fetch(url, ok404=False, headers=None, tries=4):
+def fetch(url, ok404=False, headers=None, tries=4, timeout=30):
     """403/429/5xx は間隔を空けてリトライする"""
     last_err = None
     for i in range(tries):
         _rate_limit()
         try:
-            r = SESSION.get(url, headers=headers or SEC_HEADERS, timeout=30)
+            r = SESSION.get(url, headers=headers or SEC_HEADERS, timeout=timeout)
         except requests.RequestException as e:
             last_err = e
             time.sleep(2 * (i + 1))
@@ -307,22 +307,20 @@ AIAE_DEBT = ["FGSDODNS", "CMDEBT", "BCNSDODNS",
 
 
 def fred_series(sid):
-    """FRED系列を取得 (キー不要のfredgraph.csv。失敗時はFRED_API_KEYでAPI)"""
-    try:
-        r = fetch(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
-                  headers=BROWSER_HEADERS)
-        df = pd.read_csv(io.StringIO(r.text)).iloc[:, :2]
-        df.columns = ["date", "value"]
-    except Exception:
-        key = os.environ.get("FRED_API_KEY", "")
-        if not key:
-            raise
+    """FRED系列を取得 (FRED_API_KEYがあればAPI優先、なければfredgraph.csv)"""
+    key = os.environ.get("FRED_API_KEY", "")
+    if key:
         r = fetch("https://api.stlouisfed.org/fred/series/observations"
                   f"?series_id={sid}&api_key={key}&file_type=json",
-                  headers=BROWSER_HEADERS)
+                  headers=BROWSER_HEADERS, timeout=60)
         obs = r.json()["observations"]
         df = pd.DataFrame({"date": [o["date"] for o in obs],
                            "value": [o["value"] for o in obs]})
+    else:
+        r = fetch(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
+                  headers=BROWSER_HEADERS, timeout=60)
+        df = pd.read_csv(io.StringIO(r.text)).iloc[:, :2]
+        df.columns = ["date", "value"]
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     return df.dropna().set_index("date")["value"].rename(sid)
@@ -431,8 +429,10 @@ def update_breadth(spx):
                     walk(v, label)
         walk(j)
         if "nyse" not in found or "nasdaq" not in found:
-            top_keys = list(j.keys())[:8] if isinstance(j, dict) else type(j)
-            raise ValueError(f"WSJ応答の構造が想定外 (top keys: {top_keys})")
+            snippet = json.dumps(j.get("data", j), ensure_ascii=False)[:900] \
+                if isinstance(j, dict) else str(j)[:300]
+            log(f"[診断] WSJ data中身: {snippet}")
+            raise ValueError("WSJ応答の構造が想定外 (ログの[診断]行参照)")
         today = pd.Timestamp(dt.date.today())
         row = {"date": today}
         for k in ["adv", "dec", "nh", "nl", "issues"]:
@@ -520,7 +520,11 @@ def update_mdm2():
     try:
         r = fetch("https://www.finra.org/investors/learn-to-invest/"
                   "advanced-investing/margin-statistics",
-                  headers=BROWSER_HEADERS)
+                  headers={**BROWSER_HEADERS,
+                           "Sec-Fetch-Dest": "document",
+                           "Sec-Fetch-Mode": "navigate",
+                           "Sec-Fetch-Site": "none",
+                           "Upgrade-Insecure-Requests": "1"})
         # ページ内テーブルから 月名+数値3列 の行を抽出 (debit=第1数値, $millions)
         rows = re.findall(
             r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-]+"
@@ -546,7 +550,8 @@ def update_mdm2():
         log(f"MD/M2: 最新 {out.index[-1].date()} = {scaled.iloc[-1]:.0f} (V1スケール)")
         return {"date": out.index[-1].date(), "val": float(scaled.iloc[-1])}
     except Exception as e:
-        warnings.append(f"FINRA MD/M2取得失敗 ({e}) — 前回キャッシュを使用")
+        warnings.append(f"FINRA MD/M2取得失敗 ({e}) — キャッシュ使用 "
+                        f"(継続する場合は data/mdm2.csv に月1回手動追記)")
         if os.path.exists(MDM2_CSV):
             c = pd.read_csv(MDM2_CSV, parse_dates=["date"], index_col="date")
             return {"date": c.index[-1].date(), "val": float(c["mdm2_v1"].iloc[-1])}
