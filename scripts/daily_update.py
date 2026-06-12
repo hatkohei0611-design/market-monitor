@@ -371,6 +371,213 @@ def update_aiae(spx):
 
 
 # ============================================================
+# 2.6 天井側モジュール: WSJブレッドス -> 自前HO判定 / FINRA MD/M2 / V1スコア
+#   HO定義(2026-06-12固定): NYSE+Nasdaq合算、NH/NL両方>2.8%、
+#   SPX>50営業日前(上昇トレンド)、McClellan Osc<0、NH<=2*NL
+#   過去シード(data/hb_signals.csv のseed_*行)は目視集約の凍結値で定義が異なる
+# ============================================================
+BREADTH_CSV = os.path.join(ROOT, "data", "breadth_daily.csv")
+HB_CSV = os.path.join(ROOT, "data", "hb_signals.csv")
+MDM2_CSV = os.path.join(ROOT, "data", "mdm2.csv")
+HO_THRESH = 0.028
+
+
+def update_breadth(spx):
+    """WSJ市場データから当日のNH/NL/騰落数を取得して蓄積、HO判定"""
+    cols = ["date", "adv", "dec", "nh", "nl", "issues"]
+    bd = (pd.read_csv(BREADTH_CSV, parse_dates=["date"])
+          if os.path.exists(BREADTH_CSV) else pd.DataFrame(columns=cols))
+    url = ("https://www.wsj.com/market-data/stocks/marketsdiary"
+           "?id=%7B%22application%22%3A%22WSJ%22%2C%22marketsDiaryType%22"
+           "%3A%22diaries%22%7D&type=mdc_marketsdiary")
+    try:
+        r = fetch(url, headers={**BROWSER_HEADERS,
+                                "Accept": "application/json, text/plain, */*",
+                                "Referer": "https://www.wsj.com/market-data"})
+        j = r.json()
+        # 柔軟パース: 構造内からNYSE/Nasdaqの診断項目を再帰探索
+        found = {}
+
+        def walk(node, label=""):
+            if isinstance(node, dict):
+                lab = str(node.get("name", node.get("exchange", label)))
+                keys = {k.lower(): k for k in node.keys()}
+                def grab(*cands):
+                    for c in cands:
+                        for kl, ko in keys.items():
+                            if c in kl:
+                                v = node[ko]
+                                if isinstance(v, dict):
+                                    v = v.get("value", v.get("raw"))
+                                try:
+                                    return float(str(v).replace(",", ""))
+                                except (TypeError, ValueError):
+                                    pass
+                    return None
+                rec = {"adv": grab("advanc"), "dec": grab("declin"),
+                       "nh": grab("newhigh", "new high", "52weekhigh", "hi52"),
+                       "nl": grab("newlow", "new low", "52weeklow", "lo52"),
+                       "issues": grab("issuestraded", "total issues", "issues")}
+                ll = lab.lower()
+                if rec["adv"] is not None and rec["nh"] is not None:
+                    if "nyse" in ll and "amex" not in ll and "arca" not in ll:
+                        found.setdefault("nyse", rec)
+                    elif "nasdaq" in ll:
+                        found.setdefault("nasdaq", rec)
+                for v in node.values():
+                    walk(v, lab)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v, label)
+        walk(j)
+        if "nyse" not in found or "nasdaq" not in found:
+            top_keys = list(j.keys())[:8] if isinstance(j, dict) else type(j)
+            raise ValueError(f"WSJ応答の構造が想定外 (top keys: {top_keys})")
+        today = pd.Timestamp(dt.date.today())
+        row = {"date": today}
+        for k in ["adv", "dec", "nh", "nl", "issues"]:
+            vals = [found[m][k] for m in ("nyse", "nasdaq")
+                    if found[m][k] is not None]
+            row[k] = sum(vals) if vals else None
+        if row["issues"] is None:  # issues欠落時はadv+dec+α近似不可 -> NH/NL率計算不可
+            raise ValueError("issues traded が取得できません")
+        bd = pd.concat([bd, pd.DataFrame([row])], ignore_index=True)
+        bd = bd.drop_duplicates("date", keep="last").sort_values("date")
+        bd.to_csv(BREADTH_CSV, index=False)
+        log(f"breadth(WSJ): {row['date'].date()} NH={row['nh']:.0f} "
+            f"NL={row['nl']:.0f} issues={row['issues']:.0f}")
+    except Exception as e:
+        warnings.append(f"WSJブレッドス取得失敗 ({e}) — 本日のHO判定スキップ")
+        return bd
+    # ---- HO判定 (最新日) ----
+    if len(bd) >= 1 and spx is not None and len(spx) > 60:
+        b = bd.iloc[-1]
+        nh_pct = b["nh"] / b["issues"]
+        nl_pct = b["nl"] / b["issues"]
+        c1 = nh_pct > HO_THRESH and nl_pct > HO_THRESH
+        c4 = b["nh"] <= 2 * b["nl"]
+        spx_s = spx.sort_values("date")["close"]
+        c2 = float(spx_s.iloc[-1]) > float(spx_s.iloc[-51])
+        # McClellan Oscillator (ratio-adjusted, EMA19-EMA39) — 39日蓄積後に有効
+        c3, mo = None, None
+        if len(bd) >= 39:
+            rana = (bd["adv"] - bd["dec"]) / (bd["adv"] + bd["dec"]) * 1000
+            mo = float(rana.ewm(span=19).mean().iloc[-1]
+                       - rana.ewm(span=39).mean().iloc[-1])
+            c3 = mo < 0
+        else:
+            warnings.append(f"McClellan蓄積中 ({len(bd)}/39日) — HO判定は3条件版(暫定)")
+        provisional = c3 is None
+        fired = c1 and c2 and c4 and (c3 if c3 is not None else True)
+        log(f"HO条件: NH%={nh_pct:.2%} NL%={nl_pct:.2%} 両方>2.8%={c1} "
+            f"上昇トレンド={c2} MO={'%.1f' % mo if mo is not None else 'N/A'} "
+            f"NH<=2NL={c4} -> {'点灯' if fired else '消灯'}")
+        if fired:
+            hb = (pd.read_csv(HB_CSV, parse_dates=["date"])
+                  if os.path.exists(HB_CSV)
+                  else pd.DataFrame(columns=["date", "signals", "source"]))
+            d = pd.Timestamp(b["date"])
+            srcname = "auto_provisional" if provisional else "auto"
+            if not ((hb["date"] == d) &
+                    (hb["source"].str.startswith("auto"))).any():
+                hb = pd.concat([hb, pd.DataFrame(
+                    [{"date": d, "signals": 1, "source": srcname}])],
+                    ignore_index=True).sort_values("date")
+                hb.to_csv(HB_CSV, index=False)
+                log("HO点灯 -> hb_signals.csv に記録")
+    return bd
+
+
+def hb_counts():
+    if not os.path.exists(HB_CSV):
+        return None
+    hb = pd.read_csv(HB_CSV, parse_dates=["date"])
+    now = pd.Timestamp(dt.date.today())
+    out = {}
+    for label, days in [("3m", 91), ("6m", 182), ("12m", 365)]:
+        out[label] = int(hb[hb["date"] > now - pd.Timedelta(days=days)]
+                         ["signals"].sum())
+    return out
+
+
+def ho_level(c):
+    """4段階階層型クラスター判定 (NYSE+Nasdaq合算閾値)"""
+    if c is None:
+        return None
+    if c["3m"] >= 20 or c["12m"] >= 53:
+        return 4, "Crisis (2018年級)", "#8b0000"
+    if c["3m"] >= 16 and c["12m"] >= 33:
+        return 3, "Alarm (2007年級)", "#cc3333"
+    if c["3m"] >= 10 and c["12m"] >= 22:
+        return 2, "Warning (2000年級)", "#cc6633"
+    if c["6m"] >= 8 or c["12m"] >= 15:
+        return 1, "Watch (注意)", "#cc9933"
+    return 0, "通常", "#2a7d4f"
+
+
+def update_mdm2():
+    """FINRAマージンデット(月次) + FRED M2 -> V1スケールのMD/M2"""
+    try:
+        r = fetch("https://www.finra.org/investors/learn-to-invest/"
+                  "advanced-investing/margin-statistics",
+                  headers=BROWSER_HEADERS)
+        # ページ内テーブルから 月名+数値3列 の行を抽出 (debit=第1数値, $millions)
+        rows = re.findall(
+            r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-]+"
+            r"(\d{4})[^0-9]*?([\d,]{6,})", r.text)
+        if not rows:
+            raise ValueError("FINRAページからテーブルを抽出できず(構造変更?)")
+        mon = {m: i + 1 for i, m in enumerate(
+            ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+        md = pd.DataFrame(
+            [{"date": pd.Timestamp(int(y), mon[m], 1),
+              "md_mil": float(v.replace(",", ""))} for m, y, v in rows])
+        md = md.drop_duplicates("date").sort_values("date")
+        if md["md_mil"].iloc[-1] < 5e5:  # 50万(=0.5T)未満は誤抽出疑い
+            raise ValueError(f"MD抽出値が異常 ({md['md_mil'].iloc[-1]:,.0f}M)")
+        m2 = fred_series("M2SL")  # billions, 月次
+        mm = md.set_index("date")["md_mil"].div(1000)  # -> billions
+        ratio = (mm / m2).dropna()
+        scaled = ratio * 100000  # V1スケール (5382 = 5.382%相当)
+        out = pd.DataFrame({"mdm2_v1": scaled})
+        out.index.name = "date"
+        out.to_csv(MDM2_CSV)
+        log(f"MD/M2: 最新 {out.index[-1].date()} = {scaled.iloc[-1]:.0f} (V1スケール)")
+        return {"date": out.index[-1].date(), "val": float(scaled.iloc[-1])}
+    except Exception as e:
+        warnings.append(f"FINRA MD/M2取得失敗 ({e}) — 前回キャッシュを使用")
+        if os.path.exists(MDM2_CSV):
+            c = pd.read_csv(MDM2_CSV, parse_dates=["date"], index_col="date")
+            return {"date": c.index[-1].date(), "val": float(c["mdm2_v1"].iloc[-1])}
+        return None
+
+
+def compute_v1(mdm2, aiae, hbc):
+    """V1スコア = MD/M2 + HB(6m) + AIAE。35点が真の天井境界"""
+    if mdm2 is None or aiae is None or hbc is None:
+        return None
+    aiae_pct = aiae.get("rt_val", aiae["q_val"]) * 100
+    s_md = max(0.0, (mdm2["val"] - 4000) / 50)
+    s_hb = float(hbc["6m"])
+    s_ai = max(0.0, aiae_pct - 40)
+    total = s_md + s_hb + s_ai
+    if total >= 50:
+        bucket, color = "50+ 史上級バブル (2000型)", "#8b0000"
+    elif total >= 35:
+        bucket, color = "35-50 真の天井域 (過去1Y勝率0%)", "#cc3333"
+    elif total >= 25:
+        bucket, color = "25-35 偽信号警戒 (2018型混在)", "#cc6633"
+    elif total >= 15:
+        bucket, color = "15-25 注意 (2022型)", "#cc9933"
+    else:
+        bucket, color = "0-15 通常市場", "#2a7d4f"
+    return {"total": total, "md": s_md, "hb": s_hb, "ai": s_ai,
+            "aiae_pct": aiae_pct, "bucket": bucket, "color": color,
+            "mdm2": mdm2}
+
+
+# ============================================================
 # 3. 指標計算とステート判定
 # ============================================================
 def compute(df, spx):
@@ -491,7 +698,37 @@ def aiae_card(aiae):
             f'<div class="small">{rt}</div></div>')
 
 
-def build_html(res, aiae=None):
+def top_panel(v1, hbc, holv):
+    if v1 is None and hbc is None:
+        return ""
+    cards = ""
+    if v1:
+        cards += f"""
+    <div class="card state" style="background:{v1['color']}">
+      <div class="lbl">V1天井スコア</div>
+      <div class="big">{v1['total']:.1f}</div>
+      <div class="small">{v1['bucket']}<br>
+      MD/M2 {v1['md']:.1f} + HB {v1['hb']:.0f} + AIAE {v1['ai']:.1f}</div>
+    </div>
+    <div class="card"><div class="lbl">MD/M2 (FINRA {v1['mdm2']['date']})</div>
+      <div class="big">{v1['mdm2']['val']:,.0f}</div>
+      <div class="small">警戒4000 / 過去天井5000超 (2000:6366 / 2007:5690)</div></div>"""
+    if hbc is not None and holv is not None:
+        lv, name, color = holv
+        cards += f"""
+    <div class="card"><div class="lbl">HOクラスター判定</div>
+      <div class="big" style="color:{color}">Lv{lv} {name.split(' ')[0]}</div>
+      <div class="small">3M:{hbc['3m']} / 6M:{hbc['6m']} / 12M:{hbc['12m']}<br>
+      閾値(合算): Watch 6M≧8 / Warning 3M≧10 / Alarm 3M≧16</div></div>"""
+    return f"""
+  <h2 style="font-size:14px;margin:18px 0 8px;color:#1a3a6b">📈 天井側 — V1スコアモデル</h2>
+  <div class="grid">{cards}</div>
+  <div class="warn" style="background:#eef2f8;border-color:#aabbd4">
+  <b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)に依拠。HB過去分は目視集約シード(定義混成)、
+  2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)で接続点に定義不連続あり。点推定ではなく方向性として読むこと。</div>"""
+
+
+def build_html(res, aiae=None, v1=None, hbc=None, holv=None):
     now_utc = dt.datetime.utcnow()
     now_jst = now_utc + dt.timedelta(hours=9)
     if res:
@@ -543,7 +780,9 @@ def build_html(res, aiae=None):
 <header><h1>Market Monitor — インサイダー密度ステート</h1>
 <div class="sub">最終更新: {now_jst:%Y-%m-%d %H:%M} JST ({now_utc:%H:%M} UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
 <main>
+<h2 style="font-size:14px;margin:4px 0 8px;color:#1a3a6b">📉 底側 — インサイダー密度ステート</h2>
 {cards}
+{top_panel(v1, hbc, holv)}
 {warn_html}
 <img src="chart_insider.png" alt="insider">
 <img src="chart_spx.png" alt="spx">
@@ -570,9 +809,14 @@ def main():
     spx = update_spx()
     res = compute(df, spx)
     aiae = update_aiae(spx)
+    update_breadth(spx)
+    hbc = hb_counts()
+    mdm2 = update_mdm2()
+    v1 = compute_v1(mdm2, aiae, hbc)
+    holv = ho_level(hbc)
     if res:
         make_charts(res, aiae)
-    build_html(res, aiae)
+    build_html(res, aiae, v1, hbc, holv)
     log("dashboard generated")
     for w in warnings:
         log(f"WARN: {w}")
