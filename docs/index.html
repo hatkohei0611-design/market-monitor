@@ -18,7 +18,7 @@
  footer{font-size:10.5px;color:#777;padding:14px;line-height:1.6}
 </style></head><body>
 <header><h1>Market Monitor — インサイダー密度ステート</h1>
-<div class="sub">最終更新: 2026-06-12 02:07 JST (17:07 UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
+<div class="sub">最終更新: 2026-06-12 12:27 JST (03:27 UTC) / データ: SEC EDGAR + Yahoo/FRED</div></header>
 <main>
 
   <div class="grid">
@@ -30,18 +30,21 @@
     <div class="card"><div class="lbl">クラスター密度</div>
       <div class="big">0 <span class="unit">/63日</span></div>
       <div class="small">閾値: 警戒6 / パニック21</div></div>
-    <div class="card"><div class="lbl">本日の比率 (2026-04-10)</div>
-      <div class="big">0.168</div>
-      <div class="small">buy 43 / sell 256</div></div>
+    <div class="card"><div class="lbl">本日の比率 (2026-04-22)</div>
+      <div class="big">0.174</div>
+      <div class="small">buy 38 / sell 218</div></div>
     <div class="card"><div class="lbl">S&amp;P 500 DD (2026-06-11)</div>
-      <div class="big">-4.4%</div>
-      <div class="small">終値 7,279 / 252日高値比</div></div>
+      <div class="big">-2.8%</div>
+      <div class="small">終値 7,394 / 252日高値比</div></div>
+    
   </div>
-<div class="warn"><b>⚠ データ注意事項</b><ul><li>キャッチアップ中: 残り約60日分 (Actionsを再実行すると進みます)</li><li>インサイダーデータがS&P 500より62日遅れています(EDGARキャッチアップ中は正常)</li></ul></div>
+<div class="warn"><b>⚠ データ注意事項</b><ul><li>キャッチアップ中: 残り約49日分 (Actionsを再実行すると進みます)</li><li>インサイダーデータがS&P 500より50日遅れています(EDGARキャッチアップ中は正常)</li><li>AIAE取得失敗 (HTTPSConnectionPool(host='fred.stlouisfed.org', port=443): Read timed out. (read timeout=30)) — 前回キャッシュを使用</li></ul></div>
 <img src="chart_insider.png" alt="insider">
 <img src="chart_spx.png" alt="spx">
+<img src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
 </main>
 <footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy filings / sell filings (NONDERIVのP/S・filing単位・提出日ベース)。
-クラスター密度 = 過去63営業日における比率&gt;1.0の日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
+クラスター密度 = 過去63営業日における比率&gt;1.0の日数。
+AIAE = 株式時価(NCBEILQ027S+FBCELLQ027S) ÷ (株式時価 + 5借入主体負債計)、Z.1公開ラグ2.5〜5.5ヶ月、リアルタイム近似は株式部分のみS&amp;P500で補正。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
 本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
 </body></html>
