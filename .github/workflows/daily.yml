@@ -29,6 +29,7 @@ jobs:
       - name: Run daily update
         env:
           SEC_CONTACT: ${{ secrets.SEC_CONTACT }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python scripts/daily_update.py
 
       - name: Commit results
