@@ -329,17 +329,28 @@ def fred_series(sid):
 def update_aiae(spx):
     """AIAE四半期系列 + S&P500補正のリアルタイム近似を返す"""
     try:
-        cols = {}
+        cols, detail = {}, []
         for sid in AIAE_EQ + AIAE_DEBT:
-            cols[sid] = fred_series(sid)
+            s = fred_series(sid)
+            cols[sid] = s
+            detail.append(f"{sid}=〜{s.index[-1].date()}:{s.iloc[-1]:,.0f}")
+        log("AIAE系列診断: " + " | ".join(detail))
         z1 = pd.concat(cols.values(), axis=1).dropna()
         eq = z1[AIAE_EQ].sum(axis=1) / 1000.0       # millions -> billions
         debt = z1[AIAE_DEBT].sum(axis=1)
         aiae = (eq / (eq + debt)).rename("aiae")
-        # 健全性チェック (歴史レンジは概ね 20%〜55%)
         last = float(aiae.iloc[-1])
+        log(f"AIAE構成(最終{z1.index[-1].date()}): eq={eq.iloc[-1]:,.0f}B "
+            f"debt={debt.iloc[-1]:,.0f}B -> AIAE={last:.2%}")
+        stale = [sid for sid, s in cols.items()
+                 if s.index[-1] < pd.Timestamp.now() - pd.Timedelta(days=730)]
+        if stale:
+            warnings.append(f"AIAE系列が更新停止の疑い: {','.join(stale)} "
+                            f"(後継系列への切替が必要かもしれません)")
+        # 健全性チェック (歴史レンジは概ね 20%〜55%)
         if not (0.15 < last < 0.70):
-            warnings.append(f"AIAE計算値が異常 ({last:.1%}) — 系列の単位/定義を要確認")
+            warnings.append(f"AIAE計算値が異常 ({last:.1%}, eq={eq.iloc[-1]:,.0f}B/"
+                            f"debt={debt.iloc[-1]:,.0f}B) — ログのAIAE系列診断を参照")
             return None
         out = pd.DataFrame({"aiae": aiae, "eq": eq, "debt": debt})
         out.index.name = "date"
