@@ -954,6 +954,98 @@ def aiae_card(aiae, reg):
             f'<div class="small">{rt}{pred}</div></div>')
 
 
+def lookback_v1(aiae):
+    """過去のV1スコアを取得。優先: score_history.csv の日次実測 -> 月次再構成"""
+    if not aiae:
+        return []
+    now = pd.Timestamp(dt.date.today())
+    targets = [("1日前", 1, "d"), ("1週間前", 7, "d"), ("1ヶ月前", 30, "d"),
+               ("半年前", 182, "d"), ("1年前", 365, "d")]
+    # 日次実測
+    hist = None
+    hist_f = os.path.join(ROOT, "data", "score_history.csv")
+    if os.path.exists(hist_f):
+        hist = pd.read_csv(hist_f, parse_dates=["date"]).dropna(subset=["v1"])
+        hist = hist.set_index("date")["v1"].sort_index()
+    # 月次再構成
+    monthly = None
+    if os.path.exists(MDM2_CSV):
+        mm = pd.read_csv(MDM2_CSV, parse_dates=["date"]).set_index("date")["mdm2_v1"]
+        hb = pd.read_csv(HB_CSV, parse_dates=["date"]) if os.path.exists(HB_CSV) else None
+        q = aiae["q"]["aiae"]
+        m_rows = []
+        for d, mv in mm.items():
+            h6 = (hb[(hb["date"] > d - pd.Timedelta(days=182)) &
+                     (hb["date"] <= d)]["signals"].sum() if hb is not None else 0)
+            av = q[q.index <= d]
+            if not len(av):
+                continue
+            v1 = (max(0, (mv - 4000) / 50) + float(h6)
+                  + max(0, float(av.iloc[-1]) * 100 - 50))
+            m_rows.append((d, v1))
+        if m_rows:
+            monthly = pd.DataFrame(m_rows, columns=["date", "v1"]).set_index("date")["v1"]
+    out = []
+    for label, n, _ in targets:
+        target = now - pd.Timedelta(days=n)
+        val, src_name = None, None
+        if hist is not None and len(hist):
+            mask = hist.index <= target
+            if mask.any():
+                val = float(hist[mask].iloc[-1])
+                src_name = "日次実測"
+        if val is None and monthly is not None and len(monthly):
+            mask = monthly.index <= target
+            if mask.any():
+                val = float(monthly[mask].iloc[-1])
+                src_name = "月次再構成"
+        out.append((label, val, src_name, target.strftime("%Y-%m-%d")))
+    return out
+
+
+def lookback_panel(aiae, v1_now):
+    items = lookback_v1(aiae)
+    if not items:
+        return ""
+    if v1_now is None:
+        return ""
+    cur = v1_now["total"]
+    cells = ""
+    for label, val, src_name, asof in items:
+        if val is None:
+            cells += f"""
+      <div class="lb-cell"><div class="lb-lbl">{label}</div>
+        <div class="lb-val" style="color:var(--mut)">—</div>
+        <div class="lb-sub">{asof} データなし</div></div>"""
+            continue
+        diff = cur - val
+        arrow = "↗" if diff > 0.5 else ("↘" if diff < -0.5 else "→")
+        dc = "#e25656" if diff > 0.5 else ("#7ce3ae" if diff < -0.5 else "var(--mut)")
+        tag = "実測" if src_name == "日次実測" else "再構成"
+        cells += f"""
+      <div class="lb-cell"><div class="lb-lbl">{label}</div>
+        <div class="lb-val">{val:.1f}</div>
+        <div class="lb-sub" style="color:{dc}">{arrow} 差 {diff:+.1f}<br>
+        <span style="color:var(--mut);font-size:9px">{tag}・{asof}</span></div></div>"""
+    css = """<style>
+.lb-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}
+.lb-cell{background:rgba(255,255,255,.04);border:1px solid var(--line);
+border-radius:11px;padding:10px 8px;text-align:center}
+.lb-lbl{font-size:10px;color:var(--mut);font-weight:700;letter-spacing:.06em}
+.lb-val{font-size:22px;font-weight:800;font-family:'Inter',sans-serif;margin:4px 0}
+.lb-sub{font-size:10px;line-height:1.5}
+@media(max-width:640px){.lb-grid{grid-template-columns:repeat(2,1fr)}}
+</style>"""
+    return f"""
+{css}
+<h2 class="sec">V1スコア — 時系列スナップショット</h2>
+<div class="card" style="padding:14px 17px">
+  <div class="small" style="margin-bottom:6px">現在 <b style="color:var(--ink);font-size:20px">{cur:.1f}</b> との比較。
+  実測=2026-06-12以降の日次蓄積 / 再構成=md_raw×M2+HBシード+AIAE公式の月末値</div>
+  <div class="lb-grid">{cells}</div>
+</div>"""
+
+
 def top_panel(v1, hbc, holv):
     if v1 is None and hbc is None:
         return ""
@@ -1228,6 +1320,7 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 {cards}
 {top_panel(v1, hbc, holv)}
 {exp_panel(reg, istats, res, v1)}
+{lookback_panel(aiae, v1)}
 {warn_html}
 <img class="chart" src="chart_insider.png" alt="insider">
 <img class="chart" src="chart_spx.png" alt="spx">
