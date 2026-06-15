@@ -59,7 +59,7 @@ footer{font-size:10px;color:#71809c;padding:22px 24px 30px;line-height:1.9;
 max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
 </style></head><body>
 <header><div class="wrap"><h1>MARKET MONITOR</h1>
-<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-14 22:23 JST
+<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-15 14:21 JST
  / SEC EDGAR · WSJ · FRED · Yahoo</div><div class="rule"></div></div></header>
 <main>
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
@@ -86,16 +86,16 @@ max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
 <div class="grid">
     <div class="card state" style="background:linear-gradient(135deg,#cc3333,#5e1414);box-shadow:0 10px 35px rgba(226,86,86,.25)">
       <div class="lbl">V1 天井スコア</div>
-      <div class="big">48.5</div>
-      <div class="bar" style="background:rgba(255,255,255,.25)"><i style="width:80.819804741668%"></i><b></b></div>
-      <div class="small">35-50 真の天井域 (過去1Y勝率0%)<br>MD/M2 34.4 + HB 8 + AIAE 6.1<br>点灯時1Y期待 <b>-27.1%</b> / 勝率0% (n=17, 2026-05レポート固定値)</div>
+      <div class="big">45.5</div>
+      <div class="bar" style="background:rgba(255,255,255,.25)"><i style="width:75.819804741668%"></i><b></b></div>
+      <div class="small">35-50 真の天井域 (過去1Y勝率0%)<br>MD/M2 34.4 + HB 5 + AIAE 6.1<br>点灯時1Y期待 <b>-27.1%</b> / 勝率0% (n=17, 2026-05レポート固定値)</div>
     </div>
     <div class="card"><div class="lbl">MD/M2 — FINRA 2026-04-01</div>
       <div class="big">5,719</div>
       <div class="small">警戒4000 / 過去天井5000超<br>(2000:6366 / 2007:5690 / 2026-01:5703)</div></div>
     <div class="card"><div class="lbl">HOクラスター判定</div>
-      <div class="big" style="color:#cc9933">Lv1<span class="unit"> Watch</span></div>
-      <div class="small">3M:2 / 6M:8 / 12M:13<br>
+      <div class="big" style="color:#2a7d4f">Lv0<span class="unit"> 通常</span></div>
+      <div class="small">3M:2 / 6M:5 / 12M:13<br>
       Watch 6M≧8 / Warning 3M≧10 / Alarm 3M≧16</div></div></div>
 <div class="note"><b>V1モデルの限界(必読)</b>: 35点境界の較正は実効2イベント(Dotcom/GFC)。
 HB過去分は目視集約シード、2026-06-12以降は自前ルール(2.8%・NYSE+Nasdaq合算・WSJ)。
@@ -109,7 +109,7 @@ HB/AIAEの定義不連続を含む。点推定ではなく方向性として読�
       <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
       <div class="small">現在密度 0/63日 — 点灯条件: 密度21+ (③パニック)<br>参考: 点灯時の歴史期待 12M +30.2% 勝率100% (n=210日)</div></div>
     <div class="card state" style="background:linear-gradient(135deg,#e25656,#5e1414)">
-      <div class="lbl">② V1天井モデル — 🚨 点灯中 (スコア48.5)</div>
+      <div class="lbl">② V1天井モデル — 🚨 点灯中 (スコア45.5)</div>
       <div class="big">-27.1%<span class="unit"> /1Y期待</span></div>
       <div class="small">勝率0% / n=17 — 35-50 真の天井域<br>
       2026-05バックテスト固定値 (実効2イベント、点推定でなく方向性)</div></div>
@@ -122,6 +122,42 @@ HB/AIAEの定義不連続を含む。点推定ではなく方向性として読�
 <div class="fineprint">※ ①②は点灯時のみ期待値を表示(未点灯時の大きな数字は誤解を招くため)。
 ①②が同時点灯した場合は歴史的に2008年10月型(暴落進行中の底値買い局面)であり、①の分割買いルールを優先しつつ②の継続下落リスクを併記する。
 先行リターンは重複標本のため統計的独立性なし。</div>
+
+<style>
+.lb-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}
+.lb-cell{background:rgba(255,255,255,.04);border:1px solid var(--line);
+border-radius:11px;padding:10px 8px;text-align:center}
+.lb-lbl{font-size:10px;color:var(--mut);font-weight:700;letter-spacing:.06em}
+.lb-val{font-size:22px;font-weight:800;font-family:'Inter',sans-serif;margin:4px 0}
+.lb-sub{font-size:10px;line-height:1.5}
+@media(max-width:640px){.lb-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+<h2 class="sec">V1スコア — 時系列スナップショット</h2>
+<div class="card" style="padding:14px 17px">
+  <div class="small" style="margin-bottom:6px">現在 <b style="color:var(--ink);font-size:20px">45.5</b> との比較。
+  実測=2026-06-12以降の日次蓄積 / 再構成=md_raw×M2+HBシード+AIAE公式の月末値</div>
+  <div class="lb-grid">
+      <div class="lb-cell"><div class="lb-lbl">1日前</div>
+        <div class="lb-val">48.5</div>
+        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -3.0<br>
+        <span style="color:var(--mut);font-size:9px">実測・2026-06-14</span></div></div>
+      <div class="lb-cell"><div class="lb-lbl">1週間前</div>
+        <div class="lb-val">48.3</div>
+        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -2.8<br>
+        <span style="color:var(--mut);font-size:9px">再構成・2026-06-08</span></div></div>
+      <div class="lb-cell"><div class="lb-lbl">1ヶ月前</div>
+        <div class="lb-val">48.3</div>
+        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -2.8<br>
+        <span style="color:var(--mut);font-size:9px">再構成・2026-05-16</span></div></div>
+      <div class="lb-cell"><div class="lb-lbl">半年前</div>
+        <div class="lb-val">38.8</div>
+        <div class="lb-sub" style="color:#e25656">↗ 差 +6.7<br>
+        <span style="color:var(--mut);font-size:9px">再構成・2025-12-15</span></div></div>
+      <div class="lb-cell"><div class="lb-lbl">1年前</div>
+        <div class="lb-val">17.4</div>
+        <div class="lb-sub" style="color:#e25656">↗ 差 +28.1<br>
+        <span style="color:var(--mut);font-size:9px">再構成・2025-06-15</span></div></div></div>
+</div>
 <div class="warnbox"><b>⚠ データ注意事項</b><ul><li>McClellan蓄積中 (2/39日) — HO判定は3条件版(暫定)</li></ul></div>
 <img class="chart" src="chart_insider.png" alt="insider">
 <img class="chart" src="chart_spx.png" alt="spx">
