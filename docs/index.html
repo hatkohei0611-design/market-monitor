@@ -59,7 +59,7 @@ footer{font-size:10px;color:#71809c;padding:22px 24px 30px;line-height:1.9;
 max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
 </style></head><body>
 <header><div class="wrap"><h1>MARKET MONITOR</h1>
-<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-20 01:44 JST
+<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-20 02:47 JST
  / SEC EDGAR · WSJ · FRED · Yahoo</div><div class="rule"></div></div></header>
 <main>
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
@@ -67,28 +67,29 @@ max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
   <div class="grid">
     <div class="card">
       <div class="lbl">現在のステート</div>
-      <div class="big">① 平常</div>
-      <div class="small">シグナルなし。通常運用</div>
+      <div class="big">① 沈黙</div>
+      <div class="small">案C沈黙(C=0.00<4)。通常運用。63日内ピーク C=0.00</div>
     </div>
-    <div class="card"><div class="lbl">クラスター密度</div>
-      <div class="big">0<span class="unit"> /63日</span></div>
-      <div class="small">閾値: 警戒6 / パニック21</div></div>
+    <div class="card"><div class="lbl">案C スコア (Σ超過分/63日)</div>
+      <div class="big">0.00</div>
+      <div class="small">沈黙&lt;4 / 中立4-7 / 🔔点灯≥7 / 🚨歴史的≥15<br>
+      63日内ピーク: 0.00 / 参考A密度: 0/63日</div></div>
     <div class="card"><div class="lbl">本日の比率 (2026-06-17)</div>
       <div class="big">0.179</div>
       <div class="small">buy 103 / sell 574</div></div>
-    <div class="card"><div class="lbl">S&amp;P 500 DD (2026-06-18)</div>
-      <div class="big">-1.4<span class="unit">%</span></div>
-      <div class="small">終値 7,501 / 252日高値比</div></div>
-    <div class="card"><div class="lbl">AIAE 公式 2026-01-01</div><div class="big">52.9<span class="unit">%</span></div><div class="small">リアルタイム近似 <b>56.3%</b> / 歴史Pct 100%<br>10Y期待 <b>-4.7%/年</b> (R²=0.66, n=265)</div></div>
+    <div class="card"><div class="lbl">S&amp;P 500 DD (2026-06-17)</div>
+      <div class="big">-2.5<span class="unit">%</span></div>
+      <div class="small">終値 7,420 / 252日高値比</div></div>
+    <div class="card"><div class="lbl">AIAE 公式 2026-01-01</div><div class="big">52.9<span class="unit">%</span></div><div class="small">リアルタイム近似 <b>56.1%</b> / 歴史Pct 100%<br>10Y期待 <b>-4.5%/年</b> (R²=0.66, n=265)</div></div>
   </div>
 
 <h2 class="sec top">天井側 — V1スコアモデル</h2>
 <div class="grid">
     <div class="card state" style="background:linear-gradient(135deg,#cc3333,#5e1414);box-shadow:0 10px 35px rgba(226,86,86,.25)">
       <div class="lbl">V1 天井スコア</div>
-      <div class="big">46.7</div>
-      <div class="bar" style="background:rgba(255,255,255,.25)"><i style="width:77.86625642277903%"></i><b></b></div>
-      <div class="small">35-50 真の天井域 (過去1Y勝率0%)<br>MD/M2 34.4 + HB 6 + AIAE 6.3<br>点灯時1Y期待 <b>-27.1%</b> / 勝率0% (n=17, 2026-05レポート固定値)</div>
+      <div class="big">46.5</div>
+      <div class="bar" style="background:rgba(255,255,255,.25)"><i style="width:77.42367433057855%"></i><b></b></div>
+      <div class="small">35-50 真の天井域 (過去1Y勝率0%)<br>MD/M2 34.4 + HB 6 + AIAE 6.1<br>点灯時1Y期待 <b>-27.1%</b> / 勝率0% (n=17, 2026-05レポート固定値)</div>
     </div>
     <div class="card"><div class="lbl">MD/M2 — FINRA 2026-04-01</div>
       <div class="big">5,719</div>
@@ -104,19 +105,21 @@ HB/AIAEの定義不連続を含む。点推定ではなく方向性として読�
 
 <h2 class="sec">期待値モニター</h2>
 <div class="grid">
-    <div class="card" style="opacity:.8">
-      <div class="lbl">① 底側モデル (インサイダー密度)</div>
-      <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
-      <div class="small">現在密度 0/63日 — 点灯条件: 密度21+ (③パニック)<br>参考: 点灯時の歴史期待 12M +30.2% 勝率100% (n=210日)</div></div>
+    <div class="card" style="opacity:.85">
+      <div class="lbl">① 底側案C</div>
+      <div class="big" style="color:var(--mut);font-size:24px">沈黙</div>
+      <div class="small">現在C=0.00 (閾値4で中立, 7で点灯)<br>
+      63日内ピーク: 0.00 / 参考A密度: 0/63日<br>
+      点灯時の歴史期待: 12M+30.5%/勝率100% (n=357)</div></div>
     <div class="card state" style="background:linear-gradient(135deg,#e25656,#5e1414)">
-      <div class="lbl">② V1天井モデル — 🚨 点灯中 (スコア46.7)</div>
+      <div class="lbl">② V1天井モデル — 🚨 点灯中 (スコア46.5)</div>
       <div class="big">-27.1%<span class="unit"> /1Y期待</span></div>
       <div class="small">勝率0% / n=17 — 35-50 真の天井域<br>
       2026-05バックテスト固定値 (実効2イベント、点推定でなく方向性)</div></div>
     <div class="card state" style="background:linear-gradient(135deg,#e25656,#5e1414)">
-      <div class="lbl">③ AIAE 10年回帰 (現在値 56.3%) — 🔴 弱気</div>
-      <div class="big">-38.1%<span class="unit"> /10年累積</span></div>
-      <div class="small">年率換算 -4.7%/年 / R²=0.66 / n=265四半期<br>
+      <div class="lbl">③ AIAE 10年回帰 (現在値 56.1%) — 🔴 弱気</div>
+      <div class="big">-37.1%<span class="unit"> /10年累積</span></div>
+      <div class="small">年率換算 -4.5%/年 / R²=0.66 / n=265四半期<br>
       Z.1全史×S&amp;P500価格・毎日再計算。配当除く・in-sample<br>
       判定: 累積+20%以上=強気 / -10%以下=弱気 / 中間=中立</div></div></div>
 <div class="fineprint">※ ①②は点灯時のみ期待値を表示(未点灯時の大きな数字は誤解を招くため)。
@@ -134,28 +137,28 @@ border-radius:11px;padding:10px 8px;text-align:center}
 </style>
 <h2 class="sec">V1スコア — 時系列スナップショット</h2>
 <div class="card" style="padding:14px 17px">
-  <div class="small" style="margin-bottom:6px">現在 <b style="color:var(--ink);font-size:20px">46.7</b> との比較。
+  <div class="small" style="margin-bottom:6px">現在 <b style="color:var(--ink);font-size:20px">46.5</b> との比較。
   実測=2026-06-12以降の日次蓄積 / 再構成=md_raw×M2+HBシード+AIAE公式の月末値</div>
   <div class="lb-grid">
       <div class="lb-cell"><div class="lb-lbl">1日前</div>
         <div class="lb-val">46.7</div>
-        <div class="lb-sub" style="color:var(--mut)">→ 差 +0.0<br>
+        <div class="lb-sub" style="color:var(--mut)">→ 差 -0.2<br>
         <span style="color:var(--mut);font-size:9px">実測・2026-06-18</span></div></div>
       <div class="lb-cell"><div class="lb-lbl">1週間前</div>
         <div class="lb-val">48.5</div>
-        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -1.8<br>
+        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -2.0<br>
         <span style="color:var(--mut);font-size:9px">実測・2026-06-12</span></div></div>
       <div class="lb-cell"><div class="lb-lbl">1ヶ月前</div>
         <div class="lb-val">48.3</div>
-        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -1.6<br>
+        <div class="lb-sub" style="color:#7ce3ae">↘ 差 -1.8<br>
         <span style="color:var(--mut);font-size:9px">再構成・2026-05-20</span></div></div>
       <div class="lb-cell"><div class="lb-lbl">半年前</div>
         <div class="lb-val">38.8</div>
-        <div class="lb-sub" style="color:#e25656">↗ 差 +7.9<br>
+        <div class="lb-sub" style="color:#e25656">↗ 差 +7.7<br>
         <span style="color:var(--mut);font-size:9px">再構成・2025-12-19</span></div></div>
       <div class="lb-cell"><div class="lb-lbl">1年前</div>
         <div class="lb-val">17.4</div>
-        <div class="lb-sub" style="color:#e25656">↗ 差 +29.3<br>
+        <div class="lb-sub" style="color:#e25656">↗ 差 +29.0<br>
         <span style="color:var(--mut);font-size:9px">再構成・2025-06-19</span></div></div></div>
 </div>
 <div class="warnbox"><b>⚠ データ注意事項</b><ul><li>McClellan蓄積中 (6/39日) — HO判定は3条件版(暫定)</li></ul></div>
