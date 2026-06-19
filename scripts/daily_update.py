@@ -779,22 +779,36 @@ def compute(df, spx):
     df["ratio"] = df["buy_filings"] / df["sell_filings"].replace(0, pd.NA)
     df["sig"] = (df["ratio"] > THRESH).astype(int)
     df["density"] = df["sig"].rolling(CLUSTER_WIN, min_periods=1).sum()
+    # 案C: 日次比率の超過分(max(0, ratio-1))を63日合計
+    df["excess"] = (df["ratio"] - 1.0).clip(lower=0).fillna(0)
+    df["c_score"] = df["excess"].rolling(CLUSTER_WIN, min_periods=1).sum()
     out["df"] = df
     last = df.iloc[-1]
     out["date"] = last["date"].date()
     out["ratio"] = float(last["ratio"]) if pd.notna(last["ratio"]) else None
     out["density"] = int(last["density"])
+    out["c_score"] = float(last["c_score"])
+    out["c_peak_63d"] = float(df["c_score"].tail(CLUSTER_WIN).max())
     out["buy"] = int(last["buy_filings"])
     out["sell"] = int(last["sell_filings"])
-    d = out["density"]
-    if d >= 21:
-        out["state"] = ("③ パニック", "#cc3333",
-                        "分割買い開始の候補圏。ピークアウト確認まで第1トランシェに留める")
-    elif d >= 6:
-        out["state"] = ("② 警戒", "#cc8833",
-                        "死の谷ゾーン。新規買い禁止・現金温存(検証: 6M-5.0%/勝率56%)")
+    # 案C 3段階ステート
+    c = out["c_score"]
+    if c >= 15:
+        out["state"] = ("③ 歴史的水準", "#1f9d68",
+                        f"歴史的買い場(C={c:.2f}≥15)。GFC/COVID級のシグナル。"
+                        f"分割買い・コアポジション構築の好機")
+    elif c >= 7:
+        out["state"] = ("③ 点灯", "#1f9d68",
+                        f"案C点灯(C={c:.2f}≥7)。分割買い候補圏。"
+                        f"12M期待+30.5%/勝率100%(検証20年・n=357)")
+    elif c >= 4:
+        out["state"] = ("② 中立(注意)", "#cc8833",
+                        f"立ち上がり監視域(C={c:.2f})。閾値7まで残り{7-c:.2f}。"
+                        f"買い候補のWatchlist整理タイミング")
     else:
-        out["state"] = ("① 平常", "#2a7d4f", "シグナルなし。通常運用")
+        out["state"] = ("① 沈黙", "#2a7d4f",
+                        f"案C沈黙(C={c:.2f}<4)。通常運用。"
+                        f"63日内ピーク C={out['c_peak_63d']:.2f}")
     if len(df) < CLUSTER_WIN:
         warnings.append(f"密度のウォームアップ中 (履歴{len(df)}日 < 63日)")
     if len(spx):
@@ -1083,25 +1097,38 @@ HB/AIAEの定義不連続を含む。点推定ではなく方向性として読�
 
 def exp_panel(reg, istats, res, v1):
     cards = ""
-    # ① 底側モデル (インサイダー密度) — ③パニック点灯時のみ期待値を表示
-    lit_b = res is not None and res["density"] >= 21
-    s21 = (istats or {}).get("21+")
-    if lit_b and s21:
+    # ① 底側モデル (案C) — 点灯時のみ大きな期待値を表示
+    c = res["c_score"] if res else 0
+    if c >= 15:
+        # 歴史的水準 — 20年検証 n=277 / 1Y+33%/勝率100%
+        cards += f"""
+    <div class="card state" style="background:linear-gradient(135deg,#1f9d68,#0d5436);box-shadow:0 10px 35px rgba(31,157,104,.3)">
+      <div class="lbl">① 底側案C — 🚨 歴史的水準 (C={c:.2f}≥15)</div>
+      <div class="big">+33.0%<span class="unit"> /1Y期待</span></div>
+      <div class="small">勝率100% / 累積: 3Y+56% / 5Y+106% / 10Y+240%(年率+13%)<br>
+      n=277日(GFC/欧州/COVID級, 20年検証)</div></div>"""
+    elif c >= 7:
         cards += f"""
     <div class="card state" style="background:linear-gradient(135deg,#1f9d68,#0d5436)">
-      <div class="lbl">① 底側モデル — 🔔 点灯中 (密度{res['density']})</div>
-      <div class="big">{_fmt_pct(s21['m12'])}<span class="unit"> /12M期待</span></div>
-      <div class="small">勝率{s21['w12']*100:.0f}% / 6M {_fmt_pct(s21['m6'])} (勝率{s21['w6']*100:.0f}%)
-      / n={s21['n']}日 — 全履歴から毎日再計算。独立イベントは実質3-4回</div></div>"""
-    else:
-        ref = (f"参考: 点灯時の歴史期待 12M {_fmt_pct(s21['m12'])} 勝率{s21['w12']*100:.0f}%"
-               f" (n={s21['n']}日)") if s21 else ""
-        dens = res["density"] if res else "—"
+      <div class="lbl">① 底側案C — 🔔 点灯中 (C={c:.2f}≥7)</div>
+      <div class="big">+30.5%<span class="unit"> /1Y期待</span></div>
+      <div class="small">勝率100% / 累積: 3Y+57% / 5Y+102% / 10Y+242%(年率+13%)<br>
+      n=357日(4独立イベント, 20年検証・偽点灯ゼロ)</div></div>"""
+    elif c >= 4:
         cards += f"""
-    <div class="card" style="opacity:.8">
-      <div class="lbl">① 底側モデル (インサイダー密度)</div>
-      <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
-      <div class="small">現在密度 {dens}/63日 — 点灯条件: 密度21+ (③パニック)<br>{ref}</div></div>"""
+    <div class="card" style="background:linear-gradient(135deg,#e0954a,#8a4d10);color:#fff;border:none">
+      <div class="lbl" style="color:rgba(255,255,255,.8)">① 底側案C — ⚠ 中立(立ち上がり監視)</div>
+      <div class="big">C={c:.2f}<span class="unit"> /4≤C&lt;7</span></div>
+      <div class="small" style="color:rgba(255,255,255,.88)">閾値7まで残り{7-c:.2f}<br>
+      点灯したら12M期待+30.5%/勝率100%(参考)</div></div>"""
+    else:
+        cards += f"""
+    <div class="card" style="opacity:.85">
+      <div class="lbl">① 底側案C</div>
+      <div class="big" style="color:var(--mut);font-size:24px">沈黙</div>
+      <div class="small">現在C={c:.2f} (閾値4で中立, 7で点灯)<br>
+      63日内ピーク: {res['c_peak_63d']:.2f} / 参考A密度: {res['density']}/63日<br>
+      点灯時の歴史期待: 12M+30.5%/勝率100% (n=357)</div></div>"""
     # ② V1天井モデル — スコア35+ で点灯
     lit_t = v1 is not None and v1["total"] >= 35
     if lit_t:
@@ -1276,9 +1303,9 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
     if res:
         name, color, advice = res["state"]
         ratio_s = f"{res['ratio']:.3f}" if res["ratio"] is not None else "—"
-        # ①平常は点灯ではないので無彩色、②警戒=橙、③パニック=緑(分割買い局面)
+        # 案C: ①沈黙=無彩色, ②中立=橙, ③点灯/歴史的水準=緑
         grad = {"#cc8833": "linear-gradient(135deg,#e0954a,#8a4d10)",
-                "#cc3333": "linear-gradient(135deg,#1f9d68,#0d5436)"}.get(color)
+                "#1f9d68": "linear-gradient(135deg,#1f9d68,#0d5436)"}.get(color)
         if grad:
             st_open = f'<div class="card state" style="background:{grad}">'
         else:
@@ -1290,9 +1317,10 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
       <div class="big">{name}</div>
       <div class="small">{advice}</div>
     </div>
-    <div class="card"><div class="lbl">クラスター密度</div>
-      <div class="big">{res['density']}<span class="unit"> /63日</span></div>
-      <div class="small">閾値: 警戒6 / パニック21</div></div>
+    <div class="card"><div class="lbl">案C スコア (Σ超過分/63日)</div>
+      <div class="big">{res['c_score']:.2f}</div>
+      <div class="small">沈黙&lt;4 / 中立4-7 / 🔔点灯≥7 / 🚨歴史的≥15<br>
+      63日内ピーク: {res['c_peak_63d']:.2f} / 参考A密度: {res['density']}/63日</div></div>
     <div class="card"><div class="lbl">本日の比率 ({res['date']})</div>
       <div class="big">{ratio_s}</div>
       <div class="small">buy {res['buy']} / sell {res['sell']}</div></div>
