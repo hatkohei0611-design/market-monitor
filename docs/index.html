@@ -59,8 +59,8 @@ footer{font-size:10px;color:#71809c;padding:22px 24px 30px;line-height:1.9;
 max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
 </style></head><body>
 <header><div class="wrap"><h1>MARKET MONITOR</h1>
-<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-27 21:01 JST
- / SEC EDGAR · WSJ · FRED · Yahoo</div><div class="rule"></div></div></header>
+<div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 2026-06-28 06:25 JST
+ / SEC EDGAR · WSJ · FRED · Yahoo · WSTS</div><div class="rule"></div></div></header>
 <main>
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
 
@@ -82,6 +82,27 @@ max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
       <div class="small">終値 7,354 / 252日高値比</div></div>
     <div class="card"><div class="lbl">AIAE 公式 2026-01-01</div><div class="big">52.9<span class="unit">%</span></div><div class="small">リアルタイム近似 <b>55.8%</b> / 歴史Pct 100%<br>10Y期待 <b>-4.4%/年</b> (R²=0.66, n=265)</div></div>
   </div>
+
+<h2 class="sec">底側 — シリコンサイクル (半導体)</h2>
+<div class="grid">
+    <div class="card">
+      <div class="lbl">現在のステート</div>
+      <div class="big" style="font-size:22px">⚪ 中立</div>
+      <div class="small">YoY +93.9%。直近シグナル2023-11は29ヶ月前(24M超で保有終了)</div>
+    </div>
+    <div class="card"><div class="lbl">YoY 3MMA (2026-04)</div>
+      <div class="big">+93.9<span class="unit">%</span></div>
+      <div class="small">歴史Pct 100% / Mom(3M) +47.6 ↑加速<br>直近買い2023-11は保有期間終了</div></div>
+    <div class="card"><div class="lbl">買いシグナル履歴 (0%プラス転換)</div>
+      <div class="big">9<span class="unit">回</span></div>
+      <div class="small">直近: 2016-08 / 2020-02 / 2023-11<br>
+      24Mホールドで過去勝率100%/中央値+74%</div></div>
+</div>
+<img class="chart" src="chart_silicon.png" alt="silicon">
+<div class="note"><b>シリコンサイクル戦略</b>: WSTS世界半導体売上の3ヶ月移動平均YoYが
+0%をプラス転換した月にSOX/半導体をロング、24ヶ月後に機械的に売却。
+過去9回(1997-2023)で勝率100%・中央値+74%。エントリーシグナルは明確だが
+天井検出は困難(別途検証)。データは月次・約2ヶ月ラグ。投資助言ではない。</div>
 
 <h2 class="sec top">天井側 — V1スコアモデル</h2>
 <div class="grid">
@@ -161,7 +182,7 @@ border-radius:11px;padding:10px 8px;text-align:center}
         <div class="lb-sub" style="color:#e25656">↗ 差 +41.2<br>
         <span style="color:var(--mut);font-size:9px">再構成・2025-06-27</span></div></div></div>
 </div>
-<div class="warnbox"><b>⚠ データ注意事項</b><ul><li>McClellan蓄積中 (11/39日) — HO判定は3条件版(暫定)</li></ul></div>
+<div class="warnbox"><b>⚠ データ注意事項</b><ul><li>McClellan蓄積中 (11/39日) — HO判定は3条件版(暫定)</li><li>FINRA自動取得失敗(FINRA Excel全候補で失敗 (https://www.finra.org/sites/default/files/2021-03/margin-statistics.xlsx: 403 Client Error: Forbidden for url: https://www.finra.org/sites/default/files/2021-03/margin-statistics.xlsx)) — md_raw.csvキャッシュ使用</li><li>WSTS自動取得失敗(WSTS Excel取得失敗 (https://www.wsts.org/esraCMS/extension/media/f/WST/7644/WSTS-Historical-Billings-Report-Apr_2026.xlsx: `Import openpyxl` failed.  Use pip or conda to install the openpyxl package.)) — CSVキャッシュ使用</li></ul></div>
 <img class="chart" src="chart_insider.png" alt="insider">
 <img class="chart" src="chart_spx.png" alt="spx">
 <img class="chart" src="chart_aiae.png" alt="aiae" onerror="this.style.display='none'">
@@ -171,5 +192,6 @@ border-radius:11px;padding:10px 8px;text-align:center}
 <footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy/sell filings (NONDERIV P/S・filing単位・提出日)。
 クラスター密度 = 過去63営業日の比率&gt;1.0日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
 AIAE = Z.1株式時価 ÷ (株式時価+5部門負債)、公開ラグ2.5-5.5ヶ月、RT近似は株式部分のみS&amp;P500補正。
-V1 = MD/M2スコア + HB6M信号数 + max(0, AIAE-50)。本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
+V1 = MD/M2スコア + HB6M信号数 + max(0, AIAE-50)。シリコンサイクル = WSTS世界半導体売上3MMA前年比。
+本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
 </body></html>
