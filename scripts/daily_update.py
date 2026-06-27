@@ -5,12 +5,7 @@ market-monitor 日次更新スクリプト
 2. S&P 500 を Stooq から取得し、252日高値比ドローダウンを計算
 3. クラスター密度(過去63営業日の比率>1.0日数)とステートを判定
 4. docs/ にダッシュボード(HTML + チャートPNG)を生成
-
-設計メモ:
-- バックテスト(SEC四半期データ)と同じ定義: NONDERIV取引のP/S、Officer/Director、
-  filing単位カウント、提出日ベース
-- 1回の実行で処理する日数は MAX_DAYS_PER_RUN まで(初回キャッチアップは複数回実行)
-- ネットワーク失敗時もダッシュボード生成は必ず行い、警告として表示する
+5. シリコンサイクル(WSTS 3MMA YoY) と FINRA MD/M2 を自動取得
 """
 
 import datetime as dt
@@ -38,21 +33,19 @@ STATE_JSON = os.path.join(ROOT, "data", "state.json")
 DOCS = os.path.join(ROOT, "docs")
 
 MAX_DAYS_PER_RUN = int(os.environ.get("MAX_DAYS", "8"))
-TIME_BUDGET_MIN = int(os.environ.get("TIME_BUDGET_MIN", "45"))  # これを超えたら保存して終了
-WORKERS = 5  # Form 4取得の並列数 (全体でSEC上限10req/sを遵守)
+TIME_BUDGET_MIN = int(os.environ.get("TIME_BUDGET_MIN", "45"))
+WORKERS = 5
 START_TIME = time.time()
 CLUSTER_WIN = 63
 THRESH = 1.0
-REQ_INTERVAL = 0.13  # 約7.7req/s (SEC上限10req/sに余裕)
+REQ_INTERVAL = 0.13
 
 SEC_CONTACT = os.environ.get("SEC_CONTACT", "anonymous@example.com")
-# SEC公式サンプルと同じ素朴な形式: "Sample Company Name AdminContact@example.com"
 SEC_HEADERS = {
     "User-Agent": f"market-monitor {SEC_CONTACT}",
     "Accept-Encoding": "gzip, deflate",
     "Accept": "*/*",
 }
-# ブラウザ系サイト(FRED/Stooq/Yahoo)用
 BROWSER_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -66,7 +59,6 @@ _last_req = [0.0]
 
 
 def _rate_limit():
-    """全スレッド共通で約7req/sに制限"""
     with _rate_lock:
         wait = _last_req[0] + REQ_INTERVAL - time.time()
         if wait > 0:
@@ -74,7 +66,7 @@ def _rate_limit():
         _last_req[0] = time.time()
 
 
-warnings = []  # ダッシュボードに表示する警告
+warnings = []
 
 
 def log(msg):
@@ -82,7 +74,6 @@ def log(msg):
 
 
 def fetch(url, ok404=False, headers=None, tries=4, timeout=30):
-    """403/429/5xx は間隔を空けてリトライする"""
     last_err = None
     for i in range(tries):
         _rate_limit()
@@ -95,7 +86,6 @@ def fetch(url, ok404=False, headers=None, tries=4, timeout=30):
         if r.status_code == 404 and ok404:
             return None
         if r.status_code == 403 and "<Code>AccessDenied</Code>" in r.text[:400]:
-            # S3形式のAccessDenied = ファイル不存在 (休場日・未公開日)
             if ok404:
                 return None
             r.raise_for_status()
@@ -135,7 +125,6 @@ def save_state(st):
 
 
 def parse_form4(txt):
-    """Form 4 全文から (officer/directorか, NONDERIVのP有無, S有無) を返す"""
     rel = re.search(r"<isOfficer>\s*(1|true)", txt, re.I) or \
           re.search(r"<isDirector>\s*(1|true)", txt, re.I)
     if not rel:
@@ -150,13 +139,12 @@ def parse_form4(txt):
 
 
 def process_day(day):
-    """1営業日分のForm 4を集計。戻り値 (buy, sell) / 休日はNone"""
     q = (day.month - 1) // 3 + 1
     idx_url = (f"https://www.sec.gov/Archives/edgar/daily-index/"
                f"{day.year}/QTR{q}/form.{day:%Y%m%d}.idx")
     r = fetch(idx_url, ok404=True)
     if r is None:
-        return None  # 休日・週末
+        return None
     paths = []
     for line in r.text.splitlines():
         parts = line.split()
@@ -195,8 +183,7 @@ def update_insider():
     elif len(df):
         last = df["date"].max().date()
     else:
-        last = dt.date.today() - dt.timedelta(days=80)  # シードなし時の初期値
-    # EDGARの当日インデックスは米国時間夜に完成するため、2日前まで処理
+        last = dt.date.today() - dt.timedelta(days=80)
     target_end = dt.date.today() - dt.timedelta(days=2)
     day = last + dt.timedelta(days=1)
     done = added = 0
@@ -204,20 +191,20 @@ def update_insider():
         if (time.time() - START_TIME) > TIME_BUDGET_MIN * 60:
             log(f"時間予算 {TIME_BUDGET_MIN}分に到達 — ここまでを保存して終了")
             break
-        if day.weekday() < 5:  # 平日のみ
+        if day.weekday() < 5:
             try:
                 res = process_day(day)
             except Exception as e:
                 warnings.append(f"{day}: EDGAR取得エラー ({e}) — 次回再試行")
                 log(f"  ERROR {day}: {e}")
-                break  # この日で停止し、次回ここから再開
+                break
             if res is not None:
                 row = pd.DataFrame([{"date": pd.Timestamp(day),
                                      "buy_filings": res[0],
                                      "sell_filings": res[1]}])
                 df = pd.concat([df, row], ignore_index=True)
                 df = df.drop_duplicates("date", keep="last").sort_values("date")
-                df.to_csv(DATA_CSV, index=False, encoding="utf-8-sig")  # 1日ごと保存
+                df.to_csv(DATA_CSV, index=False, encoding="utf-8-sig")
                 added += 1
             done += 1
         st["last_processed"] = day.isoformat()
@@ -237,7 +224,6 @@ def update_insider():
 # 2. S&P 500 (Stooq)
 # ============================================================
 def _spx_from_yahoo():
-    """Yahoo Finance chart API (JSON)"""
     r = fetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
               "?range=2y&interval=1d", headers=BROWSER_HEADERS)
     j = r.json()["chart"]["result"][0]
@@ -249,12 +235,11 @@ def _spx_from_yahoo():
 
 
 def _spx_from_fred():
-    """FRED公式CSV (キー不要、直近10年分)"""
     r = fetch("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500",
               headers=BROWSER_HEADERS)
     df = pd.read_csv(io.StringIO(r.text))
     df = df.iloc[:, :2]
-    df.columns = ["date", "close"]  # 列名は DATE/observation_date 両対応
+    df.columns = ["date", "close"]
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     return df.dropna()
@@ -295,19 +280,14 @@ def update_spx():
 
 # ============================================================
 # 2.5 AIAE (Aggregate Investor Allocation to Equities)
-#     FRED Z.1 公式系列から構築 (過去検証: 2000Q1=51.59% vs 論文51.7%)
-#     株式時価 = NCBEILQ027S + FBCELLQ027S (百万ドル -> /1000で十億ドルに統一)
-#     負債計   = FGSDODNS + CMDEBT + BCNSDODNS + DODFFSWCMI + SLGSDODNS (十億ドル)
-#     AIAE = 株式 / (株式 + 負債)
 # ============================================================
 AIAE_CSV = os.path.join(ROOT, "data", "aiae.csv")
-AIAE_EQ = ["NCBEILQ027S", "FBCELLQ027S"]          # millions of $
+AIAE_EQ = ["NCBEILQ027S", "FBCELLQ027S"]
 AIAE_DEBT = ["FGSDODNS", "CMDEBT", "BCNSDODNS",
-             "DODFFSWCMI", "SLGSDODNS"]            # billions of $
+             "DODFFSWCMI", "SLGSDODNS"]
 
 
 def fred_series(sid):
-    """FRED系列を取得 (FRED_API_KEYがあればAPI優先、なければfredgraph.csv)"""
     key = os.environ.get("FRED_API_KEY", "")
     if key:
         r = fetch("https://api.stlouisfed.org/fred/series/observations"
@@ -327,20 +307,17 @@ def fred_series(sid):
 
 
 def update_aiae(spx):
-    """AIAE四半期系列 + S&P500補正のリアルタイム近似を返す"""
     try:
         cols, detail = {}, []
         for sid in AIAE_EQ + AIAE_DEBT:
             s = fred_series(sid)
-            # 単位正規化: FRED APIは百万$、fredgraphは表示単位(十億$等)で返す
-            # 最新値が1e6超なら百万$単位とみなし十億$へ換算
             if abs(s.iloc[-1]) > 1e6:
                 s = s / 1000.0
             cols[sid] = s
             detail.append(f"{sid}=〜{s.index[-1].date()}:{s.iloc[-1]:,.0f}B")
         log("AIAE系列診断(十億$換算後): " + " | ".join(detail))
         z1 = pd.concat(cols.values(), axis=1).dropna()
-        eq = z1[AIAE_EQ].sum(axis=1)    # 全て十億$に正規化済み
+        eq = z1[AIAE_EQ].sum(axis=1)
         debt = z1[AIAE_DEBT].sum(axis=1)
         aiae = (eq / (eq + debt)).rename("aiae")
         last = float(aiae.iloc[-1])
@@ -351,7 +328,6 @@ def update_aiae(spx):
         if stale:
             warnings.append(f"AIAE系列が更新停止の疑い: {','.join(stale)} "
                             f"(後継系列への切替が必要かもしれません)")
-        # 健全性チェック (歴史レンジは概ね 20%〜55%)
         if not (0.15 < last < 0.70):
             warnings.append(f"AIAE計算値が異常 ({last:.1%}, eq={eq.iloc[-1]:,.0f}B/"
                             f"debt={debt.iloc[-1]:,.0f}B) — ログのAIAE系列診断を参照")
@@ -368,7 +344,6 @@ def update_aiae(spx):
             return None
     res = {"q": out, "q_date": out.index[-1].date(),
            "q_val": float(out["aiae"].iloc[-1])}
-    # リアルタイム近似: 株式部分を四半期末からのS&P500変化率でスケール
     if spx is not None and len(spx):
         spx = spx.sort_values("date")
         q_end = pd.Timestamp(out.index[-1]) + pd.offsets.QuarterEnd(0)
@@ -378,16 +353,12 @@ def update_aiae(spx):
             eq_adj = float(out["eq"].iloc[-1]) * scale
             res["rt_val"] = eq_adj / (eq_adj + float(out["debt"].iloc[-1]))
             res["rt_date"] = spx["date"].iloc[-1].date()
-            # 公式値の過去分布におけるリアルタイム値のパーセンタイル
             res["rt_pct"] = float((out["aiae"] < res["rt_val"]).mean())
     return res
 
 
 # ============================================================
 # 2.6 天井側モジュール: WSJブレッドス -> 自前HO判定 / FINRA MD/M2 / V1スコア
-#   HO定義(2026-06-12固定): NYSE+Nasdaq合算、NH/NL両方>2.8%、
-#   SPX>50営業日前(上昇トレンド)、McClellan Osc<0、NH<=2*NL
-#   過去シード(data/hb_signals.csv のseed_*行)は目視集約の凍結値で定義が異なる
 # ============================================================
 BREADTH_CSV = os.path.join(ROOT, "data", "breadth_daily.csv")
 HB_CSV = os.path.join(ROOT, "data", "hb_signals.csv")
@@ -396,7 +367,6 @@ HO_THRESH = 0.028
 
 
 def update_breadth(spx):
-    """WSJ市場データから当日のNH/NL/騰落数を取得して蓄積、HO判定"""
     cols = ["date", "adv", "dec", "nh", "nl", "issues"]
     bd = (pd.read_csv(BREADTH_CSV, parse_dates=["date"])
           if os.path.exists(BREADTH_CSV) else pd.DataFrame(columns=cols))
@@ -409,8 +379,6 @@ def update_breadth(spx):
                                 "Referer": "https://www.wsj.com/market-data"})
         j = r.json()
         found = {}
-        # 実構造パース: data.instrumentSets[].headerFields[0].label = 取引所名
-        #               instruments[].id -> latestClose (直近取引日の値)
         for s in (j.get("data", {}) or {}).get("instrumentSets", []):
             hdr = s.get("headerFields") or [{}]
             label = str(hdr[0].get("label", "")).lower()
@@ -430,7 +398,6 @@ def update_breadth(spx):
                 found.setdefault("nyse", rec)
             elif "nasdaq" in label:
                 found.setdefault("nasdaq", rec)
-        # フォールバック: 旧・再帰探索
 
         def walk(node, label=""):
             if isinstance(node, dict):
@@ -478,7 +445,7 @@ def update_breadth(spx):
             vals = [found[m][k] for m in ("nyse", "nasdaq")
                     if found[m][k] is not None]
             row[k] = sum(vals) if vals else None
-        if row["issues"] is None:  # issues欠落時はadv+dec+α近似不可 -> NH/NL率計算不可
+        if row["issues"] is None:
             raise ValueError("issues traded が取得できません")
         bd = pd.concat([bd, pd.DataFrame([row])], ignore_index=True)
         bd = bd.drop_duplicates("date", keep="last").sort_values("date")
@@ -488,7 +455,6 @@ def update_breadth(spx):
     except Exception as e:
         warnings.append(f"WSJブレッドス取得失敗 ({e}) — 本日のHO判定スキップ")
         return bd
-    # ---- HO判定 (最新日) ----
     if len(bd) >= 1 and spx is not None and len(spx) > 60:
         b = bd.iloc[-1]
         nh_pct = b["nh"] / b["issues"]
@@ -497,7 +463,6 @@ def update_breadth(spx):
         c4 = b["nh"] <= 2 * b["nl"]
         spx_s = spx.sort_values("date")["close"]
         c2 = float(spx_s.iloc[-1]) > float(spx_s.iloc[-51])
-        # McClellan Oscillator (ratio-adjusted, EMA19-EMA39) — 39日蓄積後に有効
         c3, mo = None, None
         if len(bd) >= 39:
             rana = (bd["adv"] - bd["dec"]) / (bd["adv"] + bd["dec"]) * 1000
@@ -540,7 +505,6 @@ def hb_counts():
 
 
 def ho_level(c):
-    """4段階階層型クラスター判定 (NYSE+Nasdaq合算閾値)"""
     if c is None:
         return None
     if c["3m"] >= 20 or c["12m"] >= 53:
@@ -557,39 +521,95 @@ def ho_level(c):
 MDRAW_CSV = os.path.join(ROOT, "data", "md_raw.csv")
 
 
+FINRA_XLSX_FIXED = ("https://www.finra.org/sites/default/files/"
+                    "2021-03/margin-statistics.xlsx")
+FINRA_MARGIN_PAGE = ("https://www.finra.org/investors/learn-to-invest/"
+                     "advanced-investing/margin-statistics")
+
+
+def _fetch_finra_xlsx():
+    """FINRA Excelを取得しDataFrame[date, md_mil]を返す。
+    第1候補=固定URL / 第2候補=ページからxlsxリンク抽出"""
+    import io as _io
+    candidates = [FINRA_XLSX_FIXED]
+    # ページからxlsxリンクも候補に追加
+    try:
+        from urllib.parse import urljoin
+        html = fetch(FINRA_MARGIN_PAGE, headers={**BROWSER_HEADERS,
+                     "Sec-Fetch-Dest": "document",
+                     "Sec-Fetch-Mode": "navigate",
+                     "Upgrade-Insecure-Requests": "1"}).text
+        for link in re.findall(r'href=["\']([^"\']*?\.xlsx[^"\']*)["\']',
+                               html, re.I):
+            url = urljoin(FINRA_MARGIN_PAGE, link)
+            if url not in candidates:
+                candidates.append(url)
+    except Exception:
+        pass
+
+    last_err = None
+    for url in candidates:
+        try:
+            r = fetch(url, headers=BROWSER_HEADERS, timeout=40)
+            content = r.content
+            if len(content) < 10000:
+                last_err = f"{url}: サイズ過小({len(content)}B)"
+                continue
+            xls = pd.ExcelFile(_io.BytesIO(content), engine="openpyxl")
+            for sheet in xls.sheet_names:
+                df = xls.parse(sheet)
+                if df.shape[1] < 2:
+                    continue
+                cols = [str(c) for c in df.columns]
+                debit_col = next(
+                    (c for c in cols[1:] if "debit" in c.lower()), None)
+                if debit_col is None and (
+                        "month" in cols[0].lower() or "year" in cols[0].lower()):
+                    debit_col = cols[1]  # 添付構造: B列がDebit
+                if debit_col is None:
+                    continue
+                out = df[[cols[0], debit_col]].copy()
+                out.columns = ["date", "md_mil"]
+                out["date"] = pd.to_datetime(out["date"], errors="coerce")
+                out["md_mil"] = pd.to_numeric(
+                    out["md_mil"].astype(str).str.replace(",", ""),
+                    errors="coerce")
+                out = out.dropna(subset=["date", "md_mil"]).sort_values("date")
+                if len(out) >= 12 and out["md_mil"].iloc[-1] > 5e5:
+                    log(f"FINRA Excel取得成功: {url[-40:]} "
+                        f"シート'{sheet}' {len(out)}ヶ月 "
+                        f"(最新{out['date'].iloc[-1]:%Y-%m}="
+                        f"{out['md_mil'].iloc[-1]:,.0f}M)")
+                    return out
+            last_err = f"{url}: Debit列を特定できず"
+        except Exception as e:
+            last_err = f"{url}: {e}"
+            continue
+    raise RuntimeError(f"FINRA Excel全候補で失敗 ({last_err})")
+
+
 def update_mdm2():
     """FINRAマージンデット(月次) + FRED M2 -> V1スケールのMD/M2
-    優先順: ①FINRA自動取得 ②md_raw.csv(手動の生Debit値) ③mdm2.csvキャッシュ"""
+    優先順: ①FINRA公式Excel直接取得 ②md_raw.csv(手動の生Debit値)
+            ③mdm2.csvキャッシュ"""
     md = None
     try:
-        r = fetch("https://www.finra.org/investors/learn-to-invest/"
-                  "advanced-investing/margin-statistics",
-                  headers={**BROWSER_HEADERS,
-                           "Sec-Fetch-Dest": "document",
-                           "Sec-Fetch-Mode": "navigate",
-                           "Sec-Fetch-Site": "none",
-                           "Upgrade-Insecure-Requests": "1"})
-        # ページ内テーブルから 月名+数値3列 の行を抽出 (debit=第1数値, $millions)
-        rows = re.findall(
-            r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-]+"
-            r"(\d{4})[^0-9]*?([\d,]{6,})", r.text)
-        if not rows:
-            raise ValueError("FINRAページからテーブルを抽出できず(構造変更?)")
-        mon = {m: i + 1 for i, m in enumerate(
-            ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-             "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
-        md = pd.DataFrame(
-            [{"date": pd.Timestamp(int(y), mon[m], 1),
-              "md_mil": float(v.replace(",", ""))} for m, y, v in rows])
-        md = md.drop_duplicates("date").sort_values("date")
-        if md["md_mil"].iloc[-1] < 5e5:  # 50万(=0.5T)未満は誤抽出疑い
-            raise ValueError(f"MD抽出値が異常 ({md['md_mil'].iloc[-1]:,.0f}M)")
+        md = _fetch_finra_xlsx()
+        # 取得成功したら md_raw.csv も更新しておく(次回フォールバック用の鮮度維持)
+        try:
+            bak = md.rename(columns={"md_mil": "debit_mil"})[["date", "debit_mil"]].copy()
+            bak["date"] = bak["date"].dt.strftime("%Y-%m-%d")
+            bak.to_csv(MDRAW_CSV, index=False)
+        except Exception:
+            pass
     except Exception as e:
         if os.path.exists(MDRAW_CSV):
             md = pd.read_csv(MDRAW_CSV, parse_dates=["date"]).rename(
                 columns={"debit_mil": "md_mil"}).sort_values("date")
-            log(f"FINRA自動取得失敗 -> md_raw.csv使用 "
-                f"(最新 {md['date'].iloc[-1].date()}: {md['md_mil'].iloc[-1]:,.0f}M)")
+            log(f"FINRA Excel取得失敗 -> md_raw.csv使用 "
+                f"(最新 {md['date'].iloc[-1].date()}: "
+                f"{md['md_mil'].iloc[-1]:,.0f}M)")
+            warnings.append(f"FINRA自動取得失敗({e}) — md_raw.csvキャッシュ使用")
         else:
             warnings.append(f"FINRA MD/M2取得失敗 ({e}) — キャッシュ使用 "
                             f"(data/md_raw.csv に月1回、生のDebit値を追記してください)")
@@ -615,14 +635,11 @@ def update_mdm2():
 
 
 def compute_v1(mdm2, aiae, hbc):
-    """V1スコア = MD/M2 + HB(6m) + AIAE。35点が真の天井境界"""
     if mdm2 is None or aiae is None or hbc is None:
         return None
     aiae_pct = aiae.get("rt_val", aiae["q_val"]) * 100
     s_md = max(0.0, (mdm2["val"] - 4000) / 50)
     s_hb = float(hbc["6m"])
-    # FRED公式AIAEは旧較正(TradingView系)と約10pt水準が異なるため閾値50に再較正
-    # (アンカー: 2026-03のAIAEスコア2.93を再現するよう接続)
     s_ai = max(0.0, aiae_pct - 50)
     total = s_md + s_hb + s_ai
     if total >= 50:
@@ -647,7 +664,6 @@ SPXLONG_CSV = os.path.join(ROOT, "data", "spx_long.csv")
 
 
 def update_spx_long():
-    """Yahooから日次の全履歴(1927-)を取得。キャッシュ7日有効"""
     if os.path.exists(SPXLONG_CSV):
         c = pd.read_csv(SPXLONG_CSV, parse_dates=["date"])
         if c["date"].max() > pd.Timestamp.now() - pd.Timedelta(days=7):
@@ -663,11 +679,11 @@ def update_spx_long():
         return df
     try:
         p2 = int(dt.datetime.now().timestamp())
-        try:  # 日次フル履歴 (1927年からのエポック秒を明示)
+        try:
             df = _grab("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
                        f"?period1=-2208988800&period2={p2}&interval=1d", 5000)
             log(f"SPX長期(日次): {len(df)}行 ({df['date'].min().date()}〜)")
-        except Exception as e1:  # 月次フォールバック
+        except Exception as e1:
             log(f"日次フル履歴失敗 ({e1}) -> 月次にフォールバック")
             df = _grab("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC"
                        "?range=max&interval=1mo", 600)
@@ -682,7 +698,6 @@ def update_spx_long():
 
 
 def aiae_regression(aiae, spxl):
-    """AIAE四半期 vs 10年先S&P500年率リターン(価格)のOLS。毎日再計算"""
     if aiae is None or spxl is None or len(spxl) < 3000:
         return None
     try:
@@ -712,7 +727,6 @@ def aiae_regression(aiae, spxl):
 
 
 def insider_bucket_stats(df, spxl):
-    """密度バケット別の先行リターン統計(全履歴から毎日再計算)"""
     if df is None or len(df) < 300 or spxl is None:
         return None
     try:
@@ -721,11 +735,11 @@ def insider_bucket_stats(df, spxl):
         d["date"] = pd.to_datetime(d["date"]).astype("datetime64[ns]")
         s["date"] = pd.to_datetime(s["date"]).astype("datetime64[ns]")
         gap = s["date"].diff().dt.days.median()
-        h6, h12 = (6, 12) if gap > 15 else (126, 252)  # 月次/日次を自動判定
+        h6, h12 = (6, 12) if gap > 15 else (126, 252)
         d = pd.merge_asof(d, s.rename(columns={"close": "px"}), on="date")
         d["idx"] = d["date"].map(
             {dt_: i for i, dt_ in enumerate(s["date"])})
-        if gap > 15:  # 月次: 各日付を直近行へ割当
+        if gap > 15:
             d["idx"] = d["date"].map(
                 lambda t: s["date"].searchsorted(t, side="right") - 1)
         d = d.dropna(subset=["idx", "px"])
@@ -750,8 +764,6 @@ def insider_bucket_stats(df, spxl):
         return None
 
 
-# V1バケット統計 (2026-05レポート固定値: 過去のMD/M2・HB月次系列が
-# リポジトリにないため再計算不可。較正の出典を明示して固定表示)
 V1_BUCKETS = [
     (0, 15, "0-15 通常市場", "+11〜17%", "86-96%", 215),
     (15, 25, "15-25 注意(2022型)", "-0.3〜-4.3%", "40-50%", 37),
@@ -769,6 +781,301 @@ def v1_bucket_row(total):
 
 
 # ============================================================
+# 2.8 シリコンサイクル (WSTS 3MMA YoY) — 半導体底値検出
+#   WSTS公式サイトからExcelを自動取得 -> 3MMA Worldwide抽出 -> YoY計算。
+#   取得失敗時は data/silicon_3mma.csv キャッシュにフォールバック。
+#   買いシグナル: YoY 3MMAが前月<=0->当月>0 へプラス転換 かつ
+#                直前12Mに-5%以下まで沈んだ「本物の底」のみ (ノイズ除去)
+#   -> 24Mホールド戦略 (1990-2023の9回, SOX検証で勝率100%/中央値+74%)
+# ============================================================
+SILICON_CSV = os.path.join(ROOT, "data", "silicon_3mma.csv")
+WSTS_PAGE = "https://www.wsts.org/67/Historical-Billings-Report"
+
+
+def _fetch_wsts_silicon():
+    """WSTSサイトからExcelを自動取得し3MMA Worldwide売上を返す。
+    戻り値: pd.Series (index=月初日, value=3MMA売上)。失敗時は例外。"""
+    import io as _io
+    from urllib.parse import urljoin
+    # ページHTMLからxlsxリンクを抽出
+    html = fetch(WSTS_PAGE, headers={**BROWSER_HEADERS,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}).text
+    links = []
+    for pat in [r'href=["\']([^"\']*?\.xlsx[^"\']*)["\']',
+                r'(https?://[^\s"\'<>]*?\.xlsx)']:
+        links += re.findall(pat, html, re.I)
+    links = list(dict.fromkeys(links))
+    links.sort(key=lambda u: (0 if re.search(r'histor|billing', u, re.I) else 1))
+    if not links:
+        raise ValueError("WSTSページに.xlsxリンクなし(JS生成/同意要の可能性)")
+
+    last_err = None
+    for link in links:
+        url = urljoin(WSTS_PAGE, link)
+        try:
+            content = fetch(url, headers=BROWSER_HEADERS, timeout=40).content
+            if len(content) < 10000:
+                last_err = f"{url}: サイズ過小"; continue
+            xls = pd.ExcelFile(_io.BytesIO(content), engine="openpyxl")
+            mma = next((s for s in xls.sheet_names if "mma" in s.lower()), None)
+            if mma is None:
+                last_err = f"{url}: 3MMAシートなし"; continue
+            ws = xls.parse(mma, header=None)
+            recs, year = [], None
+            for _, row in ws.iterrows():
+                a = row.iloc[0]
+                if pd.notna(a) and isinstance(a, (int, float)) and 1986 <= a <= 2035:
+                    year = int(a); continue
+                if pd.notna(a) and str(a).strip() == "Worldwide" and year:
+                    for m in range(1, 13):
+                        if m < len(row):
+                            v = row.iloc[m]
+                            if pd.notna(v) and isinstance(v, (int, float)) and v > 0:
+                                recs.append((pd.Timestamp(f"{year}-{m:02d}-01"),
+                                             float(v)))
+            if len(recs) >= 100:
+                s = pd.Series([v for _, v in recs],
+                              index=[d for d, _ in recs]).sort_index()
+                log(f"WSTS自動取得成功: {url[-45:]} {len(s)}ヶ月 "
+                    f"(最新{s.index[-1]:%Y-%m})")
+                return s
+            last_err = f"{url}: 抽出{len(recs)}件と不足"
+        except Exception as e:
+            last_err = f"{url}: {e}"; continue
+    raise RuntimeError(f"WSTS Excel取得失敗 ({last_err})")
+
+
+def update_silicon():
+    """WSTSシリコンサイクルを取得・計算。自動取得→CSVキャッシュの順"""
+    s = None
+    # ① WSTSサイトから自動取得
+    try:
+        s = _fetch_wsts_silicon()
+        # 成功したらCSVキャッシュも更新(次回フォールバック用の鮮度維持)
+        try:
+            os.makedirs(os.path.dirname(SILICON_CSV), exist_ok=True)
+            bak = pd.DataFrame({"date": [d.strftime("%Y-%m-%d") for d in s.index],
+                                "sales_3mma": [round(v, 1) for v in s.values]})
+            bak.to_csv(SILICON_CSV, index=False)
+        except Exception:
+            pass
+    except Exception as e:
+        # ② CSVキャッシュにフォールバック
+        if os.path.exists(SILICON_CSV):
+            df = pd.read_csv(SILICON_CSV, parse_dates=["date"]).sort_values("date")
+            df = df[df["sales_3mma"] > 0]
+            s = df.set_index("date")["sales_3mma"]
+            log(f"WSTS自動取得失敗 -> silicon_3mma.csv使用 (最新{s.index[-1]:%Y-%m})")
+            warnings.append(f"WSTS自動取得失敗({e}) — CSVキャッシュ使用")
+        else:
+            warnings.append(f"WSTS取得失敗({e}) かつCSVキャッシュなし — "
+                            f"data/silicon_3mma.csvを配置してください")
+            return None
+    try:
+        if s is None or len(s) < 13:
+            warnings.append("シリコンサイクル: データ13ヶ月未満でYoY計算不可")
+            return None
+        # YoY (3MMAは既に計算済みなので前年同月比のみ)
+        yoy = (s / s.shift(12) - 1) * 100
+        yoy = yoy.dropna()
+        if len(yoy) < 2:
+            return None
+        # 0%プラス転換 (買いシグナル) を検出。
+        # ノイズ除去フィルタ: 直前12ヶ月以内にYoYが-5%以下まで沈んだ
+        # 「本物のサイクル底」からの転換のみ採用 (2008-02/2013-05等の
+        # ゼロ近傍ダマシを除外。バックテスト9回と整合)
+        DEPTH_THRESHOLD = -5.0
+        DEPTH_LOOKBACK = 12
+        cross_dates = []
+        for i in range(1, len(yoy)):
+            if yoy.iloc[i-1] <= 0 and yoy.iloc[i] > 0:
+                start = max(0, i - DEPTH_LOOKBACK)
+                recent_min = yoy.iloc[start:i].min()
+                if recent_min <= DEPTH_THRESHOLD:
+                    cross_dates.append(yoy.index[i])
+
+        cur_yoy = float(yoy.iloc[-1])
+        cur_date = yoy.index[-1]
+        prev_yoy = float(yoy.iloc[-2])
+        # モメンタム (3ヶ月変化)
+        mom3 = float(yoy.iloc[-1] - yoy.iloc[-4]) if len(yoy) >= 4 else None
+
+        # 最後の買いシグナルからの経過月数
+        last_signal = cross_dates[-1] if cross_dates else None
+        months_since = None
+        in_hold_window = False
+        hold_exit_date = None
+        if last_signal:
+            months_since = ((cur_date.year - last_signal.year) * 12
+                            + (cur_date.month - last_signal.month))
+            # 24Mホールド戦略の保有期間内か
+            in_hold_window = months_since < 24
+            # 売却予定月 (シグナル+24M)
+            exit_y = last_signal.year + (last_signal.month - 1 + 24) // 12
+            exit_m = (last_signal.month - 1 + 24) % 12 + 1
+            hold_exit_date = f"{exit_y}-{exit_m:02d}"
+
+        # 当月が買いシグナル点灯か (直近でプラス転換したばかり)
+        just_fired = (last_signal is not None
+                      and last_signal == cur_date)
+
+        # データ鮮度チェック (WSTSは約2ヶ月ラグ。3ヶ月以上古ければ警告)
+        now = pd.Timestamp(dt.date.today())
+        data_age_months = ((now.year - cur_date.year) * 12
+                           + (now.month - cur_date.month))
+        if data_age_months > 3:
+            warnings.append(f"シリコンサイクル: データが{data_age_months}ヶ月前"
+                            f"({cur_date:%Y-%m})で停止 — WSTS Blue Bookで更新を")
+
+        # 状態判定
+        if just_fired:
+            state = ("🟢 買いシグナル点灯", "#1f9d68",
+                     f"YoYが0%をプラス転換({cur_yoy:+.1f}%)。"
+                     f"24Mホールド戦略のエントリー (過去9回勝率100%/中央値+74%)")
+        elif in_hold_window:
+            state = ("🟢 ホールド期間中", "#1f9d68",
+                     f"{last_signal:%Y-%m}買いシグナルから{months_since}ヶ月経過。"
+                     f"{hold_exit_date}まで保有 (24Mホールド戦略)")
+        elif cur_yoy < 0:
+            state = ("🔵 下降局面 (次の底待ち)", "#3a6ea5",
+                     f"YoY {cur_yoy:+.1f}%。マイナス圏。"
+                     f"再びプラス転換で次の買いシグナル")
+        else:
+            state = ("⚪ 中立", "#93a0b8",
+                     f"YoY {cur_yoy:+.1f}%。直近シグナル{last_signal:%Y-%m}は"
+                     f"{months_since}ヶ月前(24M超で保有終了)")
+
+        # パーセンタイル (現在のYoYが過去全体の何%地点か)
+        pctile = float((yoy < cur_yoy).sum() / len(yoy) * 100)
+
+        # チャート生成
+        make_silicon_chart(yoy, cross_dates, s)
+
+        return {
+            "date": cur_date,
+            "yoy": cur_yoy,
+            "prev_yoy": prev_yoy,
+            "mom3": mom3,
+            "pctile": pctile,
+            "cross_dates": cross_dates,
+            "n_signals": len(cross_dates),
+            "last_signal": last_signal,
+            "months_since": months_since,
+            "in_hold_window": in_hold_window,
+            "hold_exit_date": hold_exit_date,
+            "just_fired": just_fired,
+            "state": state,
+            "data_age_months": data_age_months,
+        }
+    except Exception as e:
+        log(f"シリコンサイクル計算エラー: {e}")
+        warnings.append(f"シリコンサイクル計算失敗 ({e})")
+        return None
+
+
+def make_silicon_chart(yoy, cross_dates, sales):
+    """シリコンサイクルYoY + 買いシグナル色分けチャート"""
+    try:
+        y = yoy[yoy.index >= pd.Timestamp("1994-01-01")]
+        fig, ax = plt.subplots(figsize=(11, 4.6))
+        # 0ライン基準の塗り分け
+        ax.fill_between(y.index, y.values, 0, where=y.values >= 0,
+                        color="#1f9d68", alpha=0.18)
+        ax.fill_between(y.index, y.values, 0, where=y.values < 0,
+                        color="#cc3333", alpha=0.15)
+        ax.plot(y.index, y.values, color="#2b5aa0", lw=1.6)
+        ax.axhline(0, color="#16243f", lw=0.9)
+
+        # 買いシグナル(0%プラス転換) を緑の縦線+マーカー
+        for cd in cross_dates:
+            if cd >= y.index[0]:
+                yv = float(yoy.loc[cd])
+                ax.axvline(cd, color="#1f9d68", lw=1, ls="--", alpha=0.55)
+                ax.scatter([cd], [yv], color="#1f9d68", s=70, zorder=5,
+                           edgecolors="white", lw=1.2, marker="^")
+
+        # 24Mホールド期間を薄緑の帯で表示
+        for cd in cross_dates:
+            if cd >= y.index[0]:
+                exit_d = cd + pd.DateOffset(months=24)
+                ax.axvspan(cd, min(exit_d, y.index[-1]),
+                           color="#1f9d68", alpha=0.05)
+
+        # 現在値ラベル
+        cur = y.iloc[-1]
+        ax.scatter([y.index[-1]], [cur], color="#cc3333", s=55, zorder=6)
+        ax.annotate(f"{cur:+.0f}%", xy=(y.index[-1], cur),
+                    xytext=(8, 0), textcoords="offset points",
+                    fontsize=10, fontweight="bold", color="#cc3333",
+                    va="center")
+
+        ax.set_ylabel("YoY 3MMA (%)")
+        ax.set_title("シリコンサイクル (WSTS 3MMA 前年比) — ▲緑=買いシグナル(0%転換)/緑帯=24M保有")
+        ax.grid(alpha=0.25)
+        plt.tight_layout()
+        plt.savefig(os.path.join(DOCS, "chart_silicon.png"), dpi=110)
+        plt.close()
+        return True
+    except Exception as e:
+        log(f"シリコンサイクルチャート失敗: {e}")
+        return False
+
+
+def silicon_panel(sil):
+    """シリコンサイクルのカードパネルHTML"""
+    if sil is None:
+        return ""
+    name, color, advice = sil["state"]
+    grad = {"#1f9d68": "linear-gradient(135deg,#1f9d68,#0d5436)",
+            "#3a6ea5": "linear-gradient(135deg,#3a6ea5,#16314f)"}.get(color)
+    if grad:
+        st_open = f'<div class="card state" style="background:{grad}">'
+    else:
+        st_open = '<div class="card">'
+
+    # モメンタム表示
+    mom_s = ""
+    if sil["mom3"] is not None:
+        arrow = "↑加速" if sil["mom3"] > 0 else "↓減速"
+        mom_s = f" / Mom(3M) {sil['mom3']:+.1f} {arrow}"
+
+    # 次のシグナル/保有状態の補足
+    if sil["in_hold_window"]:
+        hold_s = (f"保有中: {sil['last_signal']:%Y-%m}買い → "
+                  f"{sil['hold_exit_date']}売り予定")
+    elif sil["yoy"] < 0:
+        hold_s = "マイナス圏。再プラス転換で次の買い場"
+    else:
+        hold_s = f"直近買い{sil['last_signal']:%Y-%m}は保有期間終了"
+
+    # 最後の3つの買いシグナル
+    recent_signals = sil["cross_dates"][-3:] if sil["cross_dates"] else []
+    sig_list = " / ".join(f"{d:%Y-%m}" for d in recent_signals)
+
+    return f"""
+<h2 class="sec">底側 — シリコンサイクル (半導体)</h2>
+<div class="grid">
+    {st_open}
+      <div class="lbl">現在のステート</div>
+      <div class="big" style="font-size:22px">{name}</div>
+      <div class="small">{advice}</div>
+    </div>
+    <div class="card"><div class="lbl">YoY 3MMA ({sil['date']:%Y-%m})</div>
+      <div class="big">{sil['yoy']:+.1f}<span class="unit">%</span></div>
+      <div class="small">歴史Pct {sil['pctile']:.0f}%{mom_s}<br>{hold_s}</div></div>
+    <div class="card"><div class="lbl">買いシグナル履歴 (0%プラス転換)</div>
+      <div class="big">{sil['n_signals']}<span class="unit">回</span></div>
+      <div class="small">直近: {sig_list}<br>
+      24Mホールドで過去勝率100%/中央値+74%</div></div>
+</div>
+<img class="chart" src="chart_silicon.png" alt="silicon">
+<div class="note"><b>シリコンサイクル戦略</b>: WSTS世界半導体売上の3ヶ月移動平均YoYが
+0%をプラス転換した月にSOX/半導体をロング、24ヶ月後に機械的に売却。
+過去9回(1997-2023)で勝率100%・中央値+74%。エントリーシグナルは明確だが
+天井検出は困難(別途検証)。データは月次・約2ヶ月ラグ。投資助言ではない。</div>"""
+
+
+# ============================================================
 # 3. 指標計算とステート判定
 # ============================================================
 def compute(df, spx):
@@ -779,7 +1086,6 @@ def compute(df, spx):
     df["ratio"] = df["buy_filings"] / df["sell_filings"].replace(0, pd.NA)
     df["sig"] = (df["ratio"] > THRESH).astype(int)
     df["density"] = df["sig"].rolling(CLUSTER_WIN, min_periods=1).sum()
-    # 案C: 日次比率の超過分(max(0, ratio-1))を63日合計
     df["excess"] = (df["ratio"] - 1.0).clip(lower=0).fillna(0)
     df["c_score"] = df["excess"].rolling(CLUSTER_WIN, min_periods=1).sum()
     out["df"] = df
@@ -791,7 +1097,6 @@ def compute(df, spx):
     out["c_peak_63d"] = float(df["c_score"].tail(CLUSTER_WIN).max())
     out["buy"] = int(last["buy_filings"])
     out["sell"] = int(last["sell_filings"])
-    # 案C 3段階ステート
     c = out["c_score"]
     if c >= 15:
         out["state"] = ("③ 歴史的水準", "#1f9d68",
@@ -969,19 +1274,16 @@ def aiae_card(aiae, reg):
 
 
 def lookback_v1(aiae):
-    """過去のV1スコアを取得。優先: score_history.csv の日次実測 -> 月次再構成"""
     if not aiae:
         return []
     now = pd.Timestamp(dt.date.today())
     targets = [("1日前", 1, "d"), ("1週間前", 7, "d"), ("1ヶ月前", 30, "d"),
                ("半年前", 182, "d"), ("1年前", 365, "d")]
-    # 日次実測
     hist = None
     hist_f = os.path.join(ROOT, "data", "score_history.csv")
     if os.path.exists(hist_f):
         hist = pd.read_csv(hist_f, parse_dates=["date"]).dropna(subset=["v1"])
         hist = hist.set_index("date")["v1"].sort_index()
-    # 月次再構成
     monthly = None
     if os.path.exists(MDM2_CSV):
         mm = pd.read_csv(MDM2_CSV, parse_dates=["date"]).set_index("date")["mdm2_v1"]
@@ -1097,10 +1399,8 @@ HB/AIAEの定義不連続を含む。点推定ではなく方向性として読�
 
 def exp_panel(reg, istats, res, v1):
     cards = ""
-    # ① 底側モデル (案C) — 点灯時のみ大きな期待値を表示
     c = res["c_score"] if res else 0
     if c >= 15:
-        # 歴史的水準 — 20年検証 n=277 / 1Y+33%/勝率100%
         cards += f"""
     <div class="card state" style="background:linear-gradient(135deg,#1f9d68,#0d5436);box-shadow:0 10px 35px rgba(31,157,104,.3)">
       <div class="lbl">① 底側案C — 🚨 歴史的水準 (C={c:.2f}≥15)</div>
@@ -1129,7 +1429,6 @@ def exp_panel(reg, istats, res, v1):
       <div class="small">現在C={c:.2f} (閾値4で中立, 7で点灯)<br>
       63日内ピーク: {res['c_peak_63d']:.2f} / 参考A密度: {res['density']}/63日<br>
       点灯時の歴史期待: 12M+30.5%/勝率100% (n=357)</div></div>"""
-    # ② V1天井モデル — スコア35+ で点灯
     lit_t = v1 is not None and v1["total"] >= 35
     if lit_t:
         bk = v1_bucket_row(v1["total"])
@@ -1146,7 +1445,6 @@ def exp_panel(reg, istats, res, v1):
       <div class="lbl">② V1天井モデル</div>
       <div class="big" style="color:var(--mut);font-size:24px">点灯なし</div>
       <div class="small">現在スコア {sc} — 点灯条件: 35+ (真の天井域)</div></div>"""
-    # ③ AIAE単品 — 常時表示 (10年累積リターン)
     if reg:
         cum = (1 + reg["pred"]) ** 10 - 1
         if cum >= 0.20:
@@ -1176,7 +1474,6 @@ def exp_panel(reg, istats, res, v1):
 
 
 def make_v1_chart(aiae):
-    """V1スコアとMD/M2の推移 (2025-12以降の月次再構成 + 日次実測の接続)"""
     try:
         if not (os.path.exists(MDM2_CSV) and os.path.exists(HB_CSV) and aiae):
             return False
@@ -1231,8 +1528,6 @@ def make_v1_chart(aiae):
 
 
 def make_v1_long_chart(aiae):
-    """長期チャート: S&P500 × V1コア(HB除く) × MD/M2 (1997-)
-    MD/M2履歴が2年以上ある場合のみ描画"""
     try:
         if not (os.path.exists(MDM2_CSV) and os.path.exists(SPXLONG_CSV) and aiae):
             return False
@@ -1297,13 +1592,13 @@ def make_v1_long_chart(aiae):
         return False
 
 
-def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=None):
+def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None,
+               istats=None, sil=None):
     now_utc = dt.datetime.utcnow()
     now_jst = now_utc + dt.timedelta(hours=9)
     if res:
         name, color, advice = res["state"]
         ratio_s = f"{res['ratio']:.3f}" if res["ratio"] is not None else "—"
-        # 案C: ①沈黙=無彩色, ②中立=橙, ③点灯/歴史的水準=緑
         grad = {"#cc8833": "linear-gradient(135deg,#e0954a,#8a4d10)",
                 "#1f9d68": "linear-gradient(135deg,#1f9d68,#0d5436)"}.get(color)
         if grad:
@@ -1342,10 +1637,11 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 <style>{CSS}</style></head><body>
 <header><div class="wrap"><h1>MARKET MONITOR</h1>
 <div class="sub">底値検出 × 天井警戒 の両面監視 — 最終更新 {now_jst:%Y-%m-%d %H:%M} JST
- / SEC EDGAR · WSJ · FRED · Yahoo</div><div class="rule"></div></div></header>
+ / SEC EDGAR · WSJ · FRED · Yahoo · WSTS</div><div class="rule"></div></div></header>
 <main>
 <h2 class="sec">底側 — インサイダー密度ステート</h2>
 {cards}
+{silicon_panel(sil)}
 {top_panel(v1, hbc, holv)}
 {exp_panel(reg, istats, res, v1)}
 {lookback_panel(aiae, v1)}
@@ -1359,7 +1655,8 @@ def build_html(res, aiae=None, v1=None, hbc=None, holv=None, reg=None, istats=No
 <footer>定義: 件数比率 = Officer/DirectorのForm 4日次 buy/sell filings (NONDERIV P/S・filing単位・提出日)。
 クラスター密度 = 過去63営業日の比率&gt;1.0日数。ステート: ①平常0-5 / ②警戒6-20(新規買い禁止) / ③パニック21+(分割買い候補)。
 AIAE = Z.1株式時価 ÷ (株式時価+5部門負債)、公開ラグ2.5-5.5ヶ月、RT近似は株式部分のみS&amp;P500補正。
-V1 = MD/M2スコア + HB6M信号数 + max(0, AIAE-50)。本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
+V1 = MD/M2スコア + HB6M信号数 + max(0, AIAE-50)。シリコンサイクル = WSTS世界半導体売上3MMA前年比。
+本ページは検証記録に基づく私的モニターであり投資助言ではない。</footer>
 </body></html>"""
     with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
@@ -1385,7 +1682,7 @@ def main():
     spxl = update_spx_long()
     reg = aiae_regression(aiae, spxl)
     istats = insider_bucket_stats(res.get("df") if res else None, spxl)
-    # スコア履歴ロギング (V1/密度/AIAEの自前時系列を蓄積)
+    sil = update_silicon()
     try:
         hist_f = os.path.join(ROOT, "data", "score_history.csv")
         h = (pd.read_csv(hist_f, parse_dates=["date"])
@@ -1406,7 +1703,7 @@ def main():
         make_charts(res, aiae)
     make_v1_chart(aiae)
     make_v1_long_chart(aiae)
-    build_html(res, aiae, v1, hbc, holv, reg, istats)
+    build_html(res, aiae, v1, hbc, holv, reg, istats, sil)
     log("dashboard generated")
     for w in warnings:
         log(f"WARN: {w}")
