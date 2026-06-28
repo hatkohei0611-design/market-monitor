@@ -978,25 +978,28 @@ def update_silicon():
 # 白背景を保ち視認性を維持しつつ、配色とフォントを統一
 # ============================================================
 LUX = {
-    "navy": "#16243f", "gold": "#d4af6a", "gold2": "#be9445",
-    "green": "#3f8266", "red": "#b15a52", "face": "#fbfaf6",
-    "grid": "#9a9075", "spine": "#cabf9f", "tick": "#6a6250",
-    "ylbl": "#5a5340", "zero": "#7d7460",
+    "bg": "#0f1830", "page": "#0c1120", "line": "#e8d3a8", "line2": "#cda35f",
+    "gold": "#f0d9a8", "gold2": "#d4af6a", "green": "#4a9e85", "red": "#b5635c",
+    "teal": "#5ec5e8", "title": "#e8d3a8", "lbl": "#8a96ad", "grid": "#22304d",
+    "spine": "#28374f", "tick": "#76839f", "zero": "#5a6789",
+    "navy": "#e8d3a8",  # 旧"navy"参照をライン色(ゴールド)にマップ
 }
 
 
 def lux_ax(ax, title, ylabel=None, accent=True, title_fs=12.5):
-    """軸にラグジュアリースタイルを適用 (タイトル+ゴールドアクセント線+グリッド)"""
-    ax.set_facecolor(LUX["face"])
-    ax.set_title(title, fontsize=title_fs, fontweight="bold",
-                 color=LUX["navy"], loc="left", pad=12)
+    """軸にダークラグジュアリースタイルを適用 (ゴールドタイトル+左縦アクセント)"""
+    ax.set_facecolor(LUX["bg"])
+    # タイトルは少し右にインデントして左の縦バーと干渉しないように
+    ax.set_title("  " + title, fontsize=title_fs, fontweight="bold",
+                 color=LUX["title"], loc="left", pad=10)
     if accent:
-        ax.annotate("", xy=(0.0, 1.06), xytext=(0.12, 1.06),
+        # タイトル左に短い縦のゴールドバー (文字に重ならない)
+        ax.annotate("", xy=(0.0, 1.045), xytext=(0.0, 1.13),
                     xycoords="axes fraction",
-                    arrowprops=dict(arrowstyle="-", color=LUX["gold"], lw=2.5))
+                    arrowprops=dict(arrowstyle="-", color=LUX["gold2"], lw=3.0))
     if ylabel:
-        ax.set_ylabel(ylabel, fontsize=9.5, color=LUX["ylbl"])
-    ax.grid(True, alpha=0.12, color=LUX["grid"], lw=0.6)
+        ax.set_ylabel(ylabel, fontsize=9.5, color=LUX["lbl"])
+    ax.grid(True, alpha=0.45, color=LUX["grid"], lw=0.5)
     for sp in ["top", "right"]:
         ax.spines[sp].set_visible(False)
     for sp in ["left", "bottom"]:
@@ -1004,18 +1007,26 @@ def lux_ax(ax, title, ylabel=None, accent=True, title_fs=12.5):
     ax.tick_params(colors=LUX["tick"], labelsize=8.5)
 
 
+def _lux_legend(ax, **kw):
+    """凡例をダーク背景用に (透明地・薄色文字)"""
+    leg = ax.legend(framealpha=0.0, **kw)
+    for t in leg.get_texts():
+        t.set_color(LUX["lbl"])
+    return leg
+
+
 def make_silicon_chart(yoy, cross_dates, sales):
     """シリコンサイクルYoY + 買いシグナル色分けチャート"""
     try:
         y = yoy[yoy.index >= pd.Timestamp("1994-01-01")]
         fig, ax = plt.subplots(figsize=(11, 4.6))
-        fig.patch.set_facecolor("white")
+        fig.patch.set_facecolor(LUX["page"])
         # 0ライン基準の塗り分け
         ax.fill_between(y.index, y.values, 0, where=y.values >= 0,
-                        color=LUX["green"], alpha=0.11)
+                        color=LUX["green"], alpha=0.15)
         ax.fill_between(y.index, y.values, 0, where=y.values < 0,
-                        color=LUX["red"], alpha=0.09)
-        ax.plot(y.index, y.values, color=LUX["navy"], lw=2.0,
+                        color=LUX["red"], alpha=0.13)
+        ax.plot(y.index, y.values, color=LUX["line"], lw=1.5,
                 solid_capstyle="round")
         ax.axhline(0, color=LUX["zero"], lw=0.9)
 
@@ -1025,26 +1036,26 @@ def make_silicon_chart(yoy, cross_dates, sales):
                 yv = float(yoy.loc[cd])
                 exit_d = cd + pd.DateOffset(months=24)
                 ax.axvspan(cd, min(exit_d, y.index[-1]),
-                           color=LUX["gold"], alpha=0.05, lw=0)
+                           color=LUX["gold2"], alpha=0.07, lw=0)
                 ax.axvline(cd, color=LUX["gold2"], lw=1.0,
                            ls=(0, (5, 3)), alpha=0.55)
-                ax.scatter([cd], [yv], s=110, marker="^", color=LUX["gold"],
-                           edgecolors="white", lw=1.5, zorder=6)
+                ax.scatter([cd], [yv], s=52, marker="^", color=LUX["gold"],
+                           edgecolors=LUX["page"], lw=1.0, zorder=6)
 
         # 現在値: ネイビー点+ゴールドリング
         cur = y.iloc[-1]
-        ax.scatter([y.index[-1]], [cur], s=95, color=LUX["navy"], zorder=7,
-                   edgecolors=LUX["gold"], lw=2.2)
+        ax.scatter([y.index[-1]], [cur], s=44, color="#ffffff", zorder=7,
+                   edgecolors=LUX["gold2"], lw=1.6)
         ax.annotate(f"{cur:+.0f}%", xy=(y.index[-1], cur),
                     xytext=(11, 0), textcoords="offset points",
-                    fontsize=13, fontweight="bold", color=LUX["gold2"],
+                    fontsize=12, fontweight="bold", color=LUX["gold"],
                     va="center")
 
         lux_ax(ax, "シリコンサイクル  —  WSTS 3MMA 前年比  (▲買いシグナル / 帯=24M保有)",
                "YoY 3MMA (%)")
         plt.tight_layout()
         plt.savefig(os.path.join(DOCS, "chart_silicon.png"), dpi=125,
-                    facecolor="white", bbox_inches="tight")
+                    facecolor=LUX["page"], bbox_inches="tight")
         plt.close()
         return True
     except Exception as e:
@@ -1170,61 +1181,60 @@ def make_charts(res, aiae=None):
         return False
     d1 = df.tail(260)
     fig, axes = plt.subplots(2, 1, figsize=(11, 6.4), sharex=True)
-    fig.patch.set_facecolor("white")
+    fig.patch.set_facecolor(LUX["page"])
     ax = axes[0]
-    ax.plot(d1["date"], d1["density"], color=LUX["navy"], lw=1.8)
-    ax.axhspan(6, 21, color=LUX["gold"], alpha=0.08)
+    ax.plot(d1["date"], d1["density"], color=LUX["line"], lw=1.5)
+    ax.axhspan(6, 21, color=LUX["gold2"], alpha=0.07)
     ax.axhline(21, color=LUX["red"], ls="--", lw=1)
     ax.axhline(6, color=LUX["gold2"], ls="--", lw=1)
     lux_ax(ax, "クラスター密度 (63日)  —  橙帯=警戒 / 赤線=パニック",
            "クラスター密度")
     ax = axes[1]
-    cols = [LUX["green"] if r > 1 else LUX["navy"] for r in d1["ratio"]]
-    ax.bar(d1["date"], d1["ratio"], color=cols, width=1.0, alpha=0.85)
+    cols = [LUX["green"] if r > 1 else LUX["teal"] for r in d1["ratio"]]
+    ax.bar(d1["date"], d1["ratio"], color=cols, width=1.0, alpha=0.8)
     ax.axhline(1.0, color=LUX["red"], ls="--", lw=1)
     lux_ax(ax, "日次 buy/sell 比率  (赤線=1.0)", "件数比率", accent=False)
     plt.tight_layout()
     plt.savefig(os.path.join(DOCS, "chart_insider.png"), dpi=125,
-                facecolor="white", bbox_inches="tight")
+                facecolor=LUX["page"], bbox_inches="tight")
     plt.close()
 
     if "spx" in res:
         s1 = res["spx"].tail(260)
         fig, axes = plt.subplots(2, 1, figsize=(11, 6.0), sharex=True)
-        fig.patch.set_facecolor("white")
-        axes[0].plot(s1["date"], s1["close"], color=LUX["navy"], lw=1.7)
+        fig.patch.set_facecolor(LUX["page"])
+        axes[0].plot(s1["date"], s1["close"], color=LUX["teal"], lw=1.5)
         lux_ax(axes[0], "S&P 500 (直近1年)", "終値")
         axes[1].fill_between(s1["date"], s1["dd"] * 100, 0,
                              color=LUX["red"], alpha=0.30)
-        axes[1].plot(s1["date"], s1["dd"] * 100, color=LUX["red"], lw=1.2)
+        axes[1].plot(s1["date"], s1["dd"] * 100, color=LUX["red"], lw=1.1)
         axes[1].axhline(-5, color=LUX["gold2"], ls=":", lw=1)
         axes[1].axhline(-15, color=LUX["gold2"], ls=":", lw=1)
         lux_ax(axes[1], "252日高値比ドローダウン", "DD (%)", accent=False)
         plt.tight_layout()
         plt.savefig(os.path.join(DOCS, "chart_spx.png"), dpi=125,
-                    facecolor="white", bbox_inches="tight")
+                    facecolor=LUX["page"], bbox_inches="tight")
         plt.close()
 
     if aiae is not None:
         q = aiae["q"]
         fig, ax = plt.subplots(figsize=(11, 4.2))
-        fig.patch.set_facecolor("white")
-        ax.plot(q.index, q["aiae"] * 100, color=LUX["navy"], lw=1.7,
+        fig.patch.set_facecolor(LUX["page"])
+        ax.plot(q.index, q["aiae"] * 100, color=LUX["line"], lw=1.5,
                 label="AIAE (Z.1公式・四半期)")
         if "rt_val" in aiae:
             ax.scatter([pd.Timestamp(aiae["rt_date"])], [aiae["rt_val"] * 100],
-                       color=LUX["gold"], zorder=5, s=70,
-                       edgecolors=LUX["navy"], lw=1.5,
+                       color=LUX["gold"], zorder=5, s=55,
+                       edgecolors=LUX["page"], lw=1.2,
                        label=f"リアルタイム近似 {aiae['rt_val']*100:.1f}%")
         med = q["aiae"].median() * 100
         ax.axhline(med, color=LUX["gold2"], ls=":", lw=1.2,
                    label=f"中央値 {med:.1f}%")
-        ax.legend(fontsize=8.5, loc="upper left", framealpha=0.92,
-                  edgecolor=LUX["spine"])
+        _lux_legend(ax, fontsize=8.5, loc="upper left")
         lux_ax(ax, "AIAE  —  投資家の株式配分比率 (FRED Z.1)", "AIAE (%)")
         plt.tight_layout()
         plt.savefig(os.path.join(DOCS, "chart_aiae.png"), dpi=125,
-                    facecolor="white", bbox_inches="tight")
+                    facecolor=LUX["page"], bbox_inches="tight")
         plt.close()
     return True
 
@@ -1279,8 +1289,8 @@ padding:12px 16px;font-size:11.5px;line-height:1.85;margin:15px 0;color:#c6d2e8}
 padding:12px 16px;font-size:11.5px;margin:15px 0;color:#e8d3a8}
 .warnbox ul{margin:6px 0 0 17px;padding:0}
 .warnbox li{margin:4px 0}
-img.chart{width:100%;border-radius:16px;background:#fff;padding:6px;
-border:1px solid var(--line);box-shadow:0 10px 30px rgba(3,7,18,.45);margin:14px 0 2px}
+img.chart{width:100%;border-radius:16px;background:#0c1120;padding:8px;
+border:1px solid rgba(212,175,106,.18);box-shadow:0 10px 30px rgba(3,7,18,.55);margin:14px 0 2px}
 .fineprint{font-size:10px;color:#71809c;line-height:1.8;margin-top:6px}
 footer{font-size:10px;color:#71809c;padding:22px 24px 30px;line-height:1.9;
 max-width:1020px;margin:0 auto;border-top:1px solid var(--line)}
@@ -1529,24 +1539,25 @@ def make_v1_chart(aiae):
              if os.path.exists(hist_f) else pd.DataFrame(columns=["date", "v1", "mdm2"]))
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6.4), sharex=True,
                                      gridspec_kw={"height_ratios": [3, 2]})
-        fig.patch.set_facecolor("white")
+        fig.patch.set_facecolor(LUX["page"])
         a1.axhspan(35, 50, color=LUX["red"], alpha=.08)
         a1.axhspan(50, 100, color=LUX["red"], alpha=.13)
         a1.axhline(35, color=LUX["red"], lw=1, ls="--", alpha=.8)
-        a1.plot(m["date"], m["v1"], "o-", color=LUX["navy"], lw=1.9, ms=6,
-                mfc=LUX["gold"], mec="white", mew=1.3,
+        a1.plot(m["date"], m["v1"], "-", color=LUX["line"], lw=1.7,
                 label="月次再構成 (md_raw×M2 + HBシード + AIAE公式)")
+        a1.scatter(m["date"], m["v1"], s=22, color=LUX["gold"],
+                   edgecolors=LUX["page"], lw=0.8, zorder=5)
         if len(h):
-            a1.plot(h["date"], h["v1"], "-", color=LUX["red"], lw=2.2,
+            a1.plot(h["date"], h["v1"], "-", color=LUX["teal"], lw=2.0,
                     label="日次実測 (2026-06-12〜)")
         a1.set_ylim(0, max(62, m["v1"].max() + 8))
-        a1.legend(fontsize=8.5, loc="lower right", framealpha=.92,
-                  edgecolor=LUX["spine"])
+        _lux_legend(a1, fontsize=8.5, loc="lower right")
         lux_ax(a1, "V1天井スコアの推移  (35=真の天井境界)", "V1スコア")
         a2.axhline(4000, color=LUX["gold2"], lw=1, ls="--", alpha=.7)
         a2.axhline(5000, color=LUX["red"], lw=1, ls="--", alpha=.7)
-        a2.plot(m["date"], m["mdm2"], "o-", color=LUX["green"], lw=1.9, ms=6,
-                mec="white", mew=1.2)
+        a2.plot(m["date"], m["mdm2"], "-", color=LUX["green"], lw=1.7)
+        a2.scatter(m["date"], m["mdm2"], s=20, color=LUX["green"],
+                   edgecolors=LUX["page"], lw=0.8, zorder=5)
         if len(h) and "mdm2" in h.columns and h["mdm2"].notna().any():
             a2.plot(h["date"], h["mdm2"], "-", color=LUX["green"], lw=1.5, alpha=.6)
         lux_ax(a2, "MD/M2 (FINRAマージンデット / M2)", "MD/M2", accent=False)
@@ -1555,7 +1566,7 @@ def make_v1_chart(aiae):
         fig.autofmt_xdate()
         fig.tight_layout()
         fig.savefig(os.path.join(DOCS, "chart_v1.png"), dpi=125,
-                    facecolor="white", bbox_inches="tight")
+                    facecolor=LUX["page"], bbox_inches="tight")
         plt.close(fig)
         return True
     except Exception as e:
@@ -1589,31 +1600,34 @@ def make_v1_long_chart(aiae):
         sp = spxl[spxl["date"] >= cdf.index[0]].set_index("date")["close"]
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(11.5, 7.4), sharex=True,
                                      gridspec_kw={"height_ratios": [3, 2]})
-        fig.patch.set_facecolor("white")
-        a1.set_facecolor(LUX["face"])
-        a1.semilogy(sp.index, sp.values, color=LUX["navy"], lw=1.4,
+        fig.patch.set_facecolor(LUX["page"])
+        a1.set_facecolor(LUX["bg"])
+        a1.semilogy(sp.index, sp.values, color=LUX["teal"], lw=1.4,
                     label="S&P 500 (左軸, log)")
-        a1.set_ylabel("S&P 500", fontsize=9.5, color=LUX["ylbl"])
-        a1.set_title("S&P 500 × V1コアスコア × MD/M2  (1997〜)",
-                     fontsize=12.5, fontweight="bold", color=LUX["navy"],
-                     loc="left", pad=12)
-        a1.annotate("", xy=(0.0, 1.06), xytext=(0.12, 1.06),
+        a1.set_ylabel("S&P 500", fontsize=9.5, color=LUX["lbl"])
+        a1.set_title("  S&P 500 × V1コアスコア × MD/M2  (1997〜)",
+                     fontsize=12.5, fontweight="bold", color=LUX["title"],
+                     loc="left", pad=10)
+        a1.annotate("", xy=(0.0, 1.045), xytext=(0.0, 1.13),
                     xycoords="axes fraction",
-                    arrowprops=dict(arrowstyle="-", color=LUX["gold"], lw=2.5))
+                    arrowprops=dict(arrowstyle="-", color=LUX["gold2"], lw=3.0))
         b1 = a1.twinx()
-        b1.fill_between(cdf.index, cdf["v1"], color=LUX["red"], alpha=.22,
+        b1.fill_between(cdf.index, cdf["v1"], color=LUX["gold2"], alpha=.18,
                         label="V1コア (MD/M2+AIAE, HB除く)")
+        b1.plot(cdf.index, cdf["v1"], color=LUX["line2"], lw=1.0, alpha=0.5)
         if fdf is not None and len(fdf):
-            b1.plot(fdf.index, fdf["v1"], color=LUX["red"], lw=2.2,
+            b1.plot(fdf.index, fdf["v1"], color=LUX["teal"], lw=2.2,
                     label="フルV1 (HB込み, 2025-12〜)")
         b1.axhline(35, color=LUX["red"], lw=1, ls="--", alpha=.7)
-        b1.set_ylabel("V1スコア (右軸)", fontsize=9.5, color=LUX["ylbl"])
+        b1.set_ylabel("V1スコア (右軸)", fontsize=9.5, color=LUX["lbl"])
         b1.set_ylim(0, max(60, cdf["v1"].max() + 8))
         ln1, lb1 = a1.get_legend_handles_labels()
         ln2, lb2 = b1.get_legend_handles_labels()
-        a1.legend(ln1 + ln2, lb1 + lb2, fontsize=8.5, loc="upper left",
-                  framealpha=.92, edgecolor=LUX["spine"])
-        a1.grid(True, alpha=0.12, color=LUX["grid"], lw=0.6)
+        _leg = a1.legend(ln1 + ln2, lb1 + lb2, fontsize=8.5,
+                         loc="upper left", framealpha=0.0)
+        for _t in _leg.get_texts():
+            _t.set_color(LUX["lbl"])
+        a1.grid(True, alpha=0.45, color=LUX["grid"], lw=0.5)
         for sp_ in ["top"]:
             a1.spines[sp_].set_visible(False)
             b1.spines[sp_].set_visible(False)
@@ -1631,14 +1645,14 @@ def make_v1_long_chart(aiae):
             if t in mm.index:
                 a2.annotate(lab, xy=(t, mm[t]), xytext=(0, 8),
                             textcoords="offset points", ha="center",
-                            fontsize=8, color=LUX["red"], fontweight="bold")
+                            fontsize=8, color=LUX["gold2"], fontweight="bold")
         a2.annotate("注: HB系列は2025-12以降のみ存在。長期線はHBを除くコアスコア",
                     xy=(0.01, 0.04), xycoords="axes fraction", fontsize=8,
                     color=LUX["tick"])
         fig.autofmt_xdate()
         fig.tight_layout()
         fig.savefig(os.path.join(DOCS, "chart_v1_long.png"), dpi=120,
-                    facecolor="white", bbox_inches="tight")
+                    facecolor=LUX["page"], bbox_inches="tight")
         plt.close(fig)
         return True
     except Exception as e:
